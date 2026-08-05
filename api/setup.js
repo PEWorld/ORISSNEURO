@@ -4,6 +4,7 @@
 // даже если с твоей машины api.telegram.org недоступен.
 import { query, json } from '../src/http.js';
 import { publicBase } from '../src/deliver.js';
+import { owners, creators, approvalChatId } from '../src/roles.js';
 
 const COMMANDS = [
   { command: 'image', description: '🖼 GPT Image 2' },
@@ -15,6 +16,13 @@ const COMMANDS = [
   { command: 'reset', description: 'Параметры по умолчанию' },
   { command: 'confirm', description: 'Окно подтверждения перед генерацией' },
   { command: 'credits', description: 'Остаток кредитов KIE' },
+  { command: 'help', description: 'Справка' },
+];
+
+// У креатора своё короткое меню — владельческие команды ему только мешают.
+const CREATOR_COMMANDS = [
+  { command: 'clear', description: 'Убрать референсы' },
+  { command: 'cancel', description: 'Отменить текущий шаг' },
   { command: 'help', description: 'Справка' },
 ];
 
@@ -45,6 +53,16 @@ export default async function handler(req, res) {
       allowed_updates: ['message', 'callback_query'],
     }),
     setMyCommands: await call('setMyCommands', { commands: COMMANDS }),
+    creatorCommands: await Promise.all(
+      creators().map(async (id) => ({
+        id,
+        res: await call('setMyCommands', {
+          commands: CREATOR_COMMANDS,
+          scope: { type: 'chat', chat_id: Number(id) },
+        }),
+      }))
+    ),
+    roles: { owners: owners(), creators: creators(), approvalsGoTo: approvalChatId() },
     me: await call('getMe'),
     webhookInfo: await call('getWebhookInfo'),
     storage: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN

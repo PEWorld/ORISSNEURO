@@ -76,6 +76,29 @@ export async function set(key, value, ttlSeconds) {
   }
 }
 
+// Атомарный счётчик. Нужен, чтобы из двух параллельных генераций одного кадра
+// ровно одна поняла, что она последняя, и собрала результат.
+export async function incr(key, ttlSeconds) {
+  switch (backend()) {
+    case 'upstash': {
+      const n = await upstash(['INCR', key]);
+      if (ttlSeconds) await upstash(['EXPIRE', key, String(ttlSeconds)]);
+      return Number(n);
+    }
+    case 'file': {
+      const f = readFile();
+      f[key] = (Number(f[key]) || 0) + 1;
+      writeFile();
+      return f[key];
+    }
+    default: {
+      const n = (Number(mem.get(key)) || 0) + 1;
+      mem.set(key, n);
+      return n;
+    }
+  }
+}
+
 export async function del(key) {
   switch (backend()) {
     case 'upstash':

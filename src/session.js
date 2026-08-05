@@ -19,6 +19,7 @@ export function emptySession() {
     modelOverride: null,
     confirm: true,
     pendingJob: null,
+    pendingFrame: null,
   };
 }
 

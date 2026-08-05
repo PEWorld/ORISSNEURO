@@ -2,24 +2,24 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { MODELS, defaultParams, findParam, coerce, formatValue } from './models.js';
 import * as session from './session.js';
 import * as store from './storage.js';
-import { createTask, getCredits, getTask, waitForTask, uploadBuffer } from './kie.js';
-import { callbackUrl, deliver, escapeHtml } from './deliver.js';
+import { createTask, getCredits, getTask, waitForTask } from './kie.js';
+import { callbackUrl, deliver, rememberJob, escapeHtml } from './deliver.js';
 import { estimate, formatEstimate } from './pricing.js';
+import { roleOf } from './roles.js';
+import { creatorComposer } from './creator.js';
+import { ingestFile } from './ingest.js';
+import { pre } from './render.js';
 
 const MK = Object.keys(MODELS); // ['image','kling','seedance'] — индексы в callback_data
 
 export function createBot(token) {
   const bot = new Bot(token);
 
-  // ── доступ ──────────────────────────────────────────────────────────────────
-  const allowed = (process.env.ALLOWED_USER_IDS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
+  // ── доступ и роли ───────────────────────────────────────────────────────────
   bot.use(async (ctx, next) => {
     const id = ctx.from?.id;
-    if (allowed.length && (!id || !allowed.includes(String(id)))) {
+    ctx.role = id ? roleOf(id) : null;
+    if (!ctx.role) {
       if (ctx.chat) await ctx.reply(`Доступа нет. Твой id: ${id}`);
       return;
     }
@@ -28,11 +28,15 @@ export function createBot(token) {
 
   bot.catch((err) => console.error('[bot]', err?.error ?? err));
 
+  // Креатор живёт в своей ветке и до владельческих обработчиков не доходит.
+  bot.filter((ctx) => ctx.role === 'creator', creatorComposer());
+  const owner = bot.filter((ctx) => ctx.role === 'owner');
+
   // ── команды ─────────────────────────────────────────────────────────────────
-  bot.command(['start', 'help'], (ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
+  owner.command(['start', 'help'], (ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
 
   for (const mk of MK) {
-    bot.command(mk, async (ctx) => {
+    owner.command(mk, async (ctx) => {
       const s = await session.update(ctx.from.id, (s) => {
         s.active = mk;
         s.awaiting = null;
@@ -47,7 +51,7 @@ export function createBot(token) {
     });
   }
 
-  bot.command('settings', async (ctx) => {
+  owner.command('settings', async (ctx) => {
     const s = await session.load(ctx.from.id);
     await ctx.reply(await settingsText(s), {
       parse_mode: 'HTML',
@@ -55,7 +59,7 @@ export function createBot(token) {
     });
   });
 
-  bot.command('set', async (ctx) => {
+  owner.command('set', async (ctx) => {
     const s = await session.load(ctx.from.id);
     const m = (ctx.match || '').trim().match(/^(\S+)\s*([\s\S]*)$/);
     if (!m) {
@@ -86,7 +90,7 @@ export function createBot(token) {
     }
   });
 
-  bot.command('reset', async (ctx) => {
+  owner.command('reset', async (ctx) => {
     const s = await session.update(ctx.from.id, (s) => {
       s.params[s.active] = defaultParams(s.active);
       s.modelOverride = null;
@@ -95,7 +99,7 @@ export function createBot(token) {
     await ctx.reply(await settingsText(s), { parse_mode: 'HTML', reply_markup: settingsKeyboard(s) });
   });
 
-  bot.command('confirm', async (ctx) => {
+  owner.command('confirm', async (ctx) => {
     const arg = (ctx.match || '').trim().toLowerCase();
     const s = await session.update(ctx.from.id, (s) => {
       s.confirm = arg === 'on' ? true : arg === 'off' ? false : s.confirm === false;
@@ -108,7 +112,7 @@ export function createBot(token) {
     );
   });
 
-  bot.command('clear', async (ctx) => {
+  owner.command('clear', async (ctx) => {
     const s = await session.update(ctx.from.id, (s) => {
       s.attachments[s.active] = [];
       return s;
@@ -116,7 +120,7 @@ export function createBot(token) {
     await ctx.reply(`🧹 Файлы для ${MODELS[s.active].label} убраны.`);
   });
 
-  bot.command('files', async (ctx) => {
+  owner.command('files', async (ctx) => {
     const s = await session.load(ctx.from.id);
     const list = s.attachments[s.active];
     if (!list.length) return ctx.reply(`Файлов нет. ${MODELS[s.active].attachHint}`);
@@ -126,7 +130,7 @@ export function createBot(token) {
     );
   });
 
-  bot.command('credits', async (ctx) => {
+  owner.command('credits', async (ctx) => {
     try {
       await ctx.reply(`💳 Кредитов на KIE: ${await getCredits()}`);
     } catch (err) {
@@ -134,7 +138,7 @@ export function createBot(token) {
     }
   });
 
-  bot.command('status', async (ctx) => {
+  owner.command('status', async (ctx) => {
     const taskId = (ctx.match || '').trim();
     if (!taskId) return ctx.reply('Формат: <code>/status &lt;taskId&gt;</code>', { parse_mode: 'HTML' });
     try {
@@ -152,7 +156,7 @@ export function createBot(token) {
   });
 
   // Полный обход схемы: свой model id и свой input — как в голом API.
-  bot.command('model', async (ctx) => {
+  owner.command('model', async (ctx) => {
     const v = (ctx.match || '').trim();
     const s = await session.update(ctx.from.id, (s) => {
       s.modelOverride = v && v !== 'reset' ? v : null;
@@ -166,7 +170,7 @@ export function createBot(token) {
     );
   });
 
-  bot.command('raw', async (ctx) => {
+  owner.command('raw', async (ctx) => {
     const body = (ctx.match || '').trim();
     if (!body) {
       return ctx.reply(
@@ -186,7 +190,7 @@ export function createBot(token) {
   });
 
   // ── файлы ───────────────────────────────────────────────────────────────────
-  bot.on(['message:photo', 'message:document', 'message:video', 'message:audio', 'message:voice'],
+  owner.on(['message:photo', 'message:document', 'message:video', 'message:audio', 'message:voice'],
     async (ctx) => {
       try {
         const att = await ingestFile(ctx);
@@ -215,7 +219,7 @@ export function createBot(token) {
   );
 
   // ── текст ───────────────────────────────────────────────────────────────────
-  bot.on('message:text', async (ctx) => {
+  owner.on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
     if (!text) return;
     const s = await session.load(ctx.from.id);
@@ -247,7 +251,7 @@ export function createBot(token) {
   });
 
   // ── инлайн-кнопки ───────────────────────────────────────────────────────────
-  bot.on('callback_query:data', async (ctx) => {
+  owner.on('callback_query:data', async (ctx) => {
     const [action, a, b, c] = ctx.callbackQuery.data.split('|');
     const userId = ctx.from.id;
 
@@ -384,21 +388,19 @@ async function runGeneration(ctx, prompt, rawPayload) {
 async function execute(ctx, job, statusId) {
   const { model, input, label } = job;
 
+  // Промпт держим прямо в сообщении о ходе работы: пока ждёшь несколько
+  // генераций сразу, только по нему и видно, какая из них какая.
+  const waiting =
+    `⏳ <b>Ваша генерация в процессе</b>\n${label} · <code>${escapeHtml(model)}</code>\n\n` +
+    pre(input.prompt);
+
   let statusMessageId = statusId;
   if (statusMessageId) {
     await ctx.api
-      .editMessageText(
-        ctx.chat.id,
-        statusMessageId,
-        `⏳ <b>${label}</b>\n<code>${escapeHtml(model)}</code>\nсоздаю задачу…`,
-        { parse_mode: 'HTML' }
-      )
+      .editMessageText(ctx.chat.id, statusMessageId, waiting, { parse_mode: 'HTML' })
       .catch(() => {});
   } else {
-    const status = await ctx.reply(
-      `⏳ <b>${label}</b>\n<code>${escapeHtml(model)}</code>\nсоздаю задачу…`,
-      { parse_mode: 'HTML' }
-    );
+    const status = await ctx.reply(waiting, { parse_mode: 'HTML' });
     statusMessageId = status.message_id;
   }
   const meta = { c: ctx.chat.id, m: statusMessageId, k: job.kind, l: label };
@@ -421,14 +423,7 @@ async function execute(ctx, job, statusId) {
       return reportFail(ctx, status.message_id, label, err.message);
     }
   }
-  await ctx.api
-    .editMessageText(
-      ctx.chat.id,
-      status.message_id,
-      `⏳ <b>${label}</b> в работе\n<code>${escapeHtml(model)}</code>\n<code>${taskId}</code>`,
-      { parse_mode: 'HTML' }
-    )
-    .catch(() => {});
+  await rememberJob(taskId, { prompt: String(input.prompt) });
 
   if (callbackUrl(meta)) {
     // Vercel: результат придёт вебхуком от KIE, крон подстрахует.
@@ -525,48 +520,6 @@ function reportFail(ctx, messageId, label, message) {
       { parse_mode: 'HTML' }
     )
     .catch(() => ctx.reply(`❌ ${label}: ${message}`));
-}
-
-// ── файлы из Telegram → хранилище KIE ─────────────────────────────────────────
-async function ingestFile(ctx) {
-  const msg = ctx.message;
-  let fileId;
-  let kind;
-  let name;
-  let mime;
-
-  if (msg.photo) {
-    fileId = msg.photo.at(-1).file_id;
-    kind = 'image';
-    name = 'photo.jpg';
-    mime = 'image/jpeg';
-  } else if (msg.video) {
-    fileId = msg.video.file_id;
-    kind = 'video';
-    name = msg.video.file_name || 'video.mp4';
-    mime = msg.video.mime_type || 'video/mp4';
-  } else if (msg.audio || msg.voice) {
-    const f = msg.audio || msg.voice;
-    fileId = f.file_id;
-    kind = 'audio';
-    name = f.file_name || (msg.voice ? 'voice.ogg' : 'audio.mp3');
-    mime = f.mime_type || 'audio/mpeg';
-  } else if (msg.document) {
-    fileId = msg.document.file_id;
-    mime = msg.document.mime_type || 'application/octet-stream';
-    name = msg.document.file_name || 'file';
-    kind = mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'image';
-  } else {
-    throw new Error('Не понял, что это за файл');
-  }
-
-  const file = await ctx.api.getFile(fileId);
-  const url = `https://api.telegram.org/file/bot${ctx.api.token}/${file.file_path}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Не смог скачать файл из Telegram (${res.status})`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const uploaded = await uploadBuffer(buf, name, mime);
-  return { kind, url: uploaded, name };
 }
 
 // ── интерфейс настроек ────────────────────────────────────────────────────────

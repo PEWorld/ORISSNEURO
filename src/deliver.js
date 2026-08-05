@@ -2,6 +2,11 @@
 import crypto from 'node:crypto';
 import { getTask, resultUrls } from './kie.js';
 import * as store from './storage.js';
+import { escapeHtml } from './html.js';
+import { captionPlan, sendMediaSmart } from './render.js';
+import { onFrameTaskDone } from './frames.js';
+
+export { escapeHtml };
 
 function secret() {
   return process.env.CALLBACK_SECRET || process.env.TELEGRAM_BOT_TOKEN || 'dev-secret';
@@ -26,7 +31,8 @@ export function publicBase() {
   );
 }
 
-// Все данные для доставки едут внутри самой ссылки — серверлесу не нужна БД для задач.
+// Всё нужное для доставки едет внутри самой ссылки — серверлесу не нужна БД для задач.
+// Промпт туда не кладём: он бывает на тысячи символов, для него отдельная запись.
 export function callbackUrl(meta) {
   const base = publicBase();
   if (!base) return null;
@@ -41,6 +47,17 @@ export function parseCallbackMeta(d, s) {
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error('подпись не сходится');
   return JSON.parse(b64u.dec(d));
+}
+
+// Промпт нужен при доставке, чтобы подписать им результат. Живёт сутки.
+const kJob = (taskId) => `job:${taskId}`;
+
+export async function rememberJob(taskId, data) {
+  await store.set(kJob(taskId), data, 60 * 60 * 24);
+}
+
+export async function recallJob(taskId) {
+  return store.get(kJob(taskId));
 }
 
 function human(data) {
@@ -60,16 +77,24 @@ async function claim(taskId) {
 
 /**
  * Отправляет результат завершённой задачи в чат.
- * @param api      grammy bot.api
- * @param meta     { c: chatId, m: messageId|null, k: 'photo'|'video', l: label }
- * @param taskId
- * @param data     уже полученный recordInfo, иначе будет запрошен
+ * @param api   grammy bot.api
+ * @param meta  { c: chatId, m: messageId|null, k: 'photo'|'video', l: label, f?: frameId, i?: index }
  */
 export async function deliver(api, meta, taskId, data) {
   if (!(await claim(taskId))) return;
   const info = data ?? (await getTask(taskId));
+
+  // Кадр креатора собирается отдельно: результат показывается, только когда
+  // добежали обе генерации.
+  if (meta.f) {
+    await store.removePending(taskId);
+    return onFrameTaskDone(api, meta, taskId, info);
+  }
+
   const chatId = meta.c;
   const label = meta.l || 'Задача';
+  const job = await recallJob(taskId);
+  const prompt = job?.prompt;
 
   const editOrSend = async (text) => {
     if (meta.m) {
@@ -98,31 +123,28 @@ export async function deliver(api, meta, taskId, data) {
     return;
   }
 
+  // Результат уходит вниз чата вместе со своим промптом — так при нескольких
+  // параллельных генерациях видно, что к чему относится.
   const stats = human(info);
-  const caption = `${label}${stats ? ` · ${stats}` : ''}`;
+  const header = `${label}${stats ? ` · ${stats}` : ''}`;
+  const { caption, overflow } = prompt
+    ? captionPlan(prompt, header)
+    : { caption: header, overflow: null };
+
+  if (meta.m) await api.deleteMessage(chatId, meta.m).catch(() => {});
 
   for (const [i, url] of urls.entries()) {
-    const cap = urls.length > 1 ? `${caption} (${i + 1}/${urls.length})` : caption;
+    const cap = i === 0 ? caption : undefined;
     try {
-      if (meta.k === 'video') {
-        await api.sendVideo(chatId, url, { caption: cap, supports_streaming: true });
-      } else {
-        await api.sendPhoto(chatId, url, { caption: cap });
-      }
+      await sendMediaSmart(api, chatId, meta.k, url, {
+        ...(cap ? { caption: cap, parse_mode: 'HTML' } : {}),
+        ...(meta.k === 'video' ? { supports_streaming: true } : {}),
+      });
     } catch {
-      // Телеграм не смог забрать файл по ссылке (слишком большой / долгий) — отдаём ссылкой.
-      try {
-        await api.sendDocument(chatId, url, { caption: cap });
-      } catch {
-        await api.sendMessage(chatId, `${cap}\n${url}`, { disable_web_page_preview: false });
-      }
+      await api.sendMessage(chatId, `${header}\n${url}`).catch(() => {});
     }
   }
+  if (overflow) await api.sendMessage(chatId, overflow, { parse_mode: 'HTML' }).catch(() => {});
 
-  await editOrSend(`✅ <b>${label}</b> готово${stats ? ` · ${stats}` : ''}`);
   await store.removePending(taskId);
-}
-
-export function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
