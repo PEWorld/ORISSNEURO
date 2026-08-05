@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/telegram.js": { "maxDuration": 60 },
+    "api/kie-callback.js": { "maxDuration": 60 },
+    "api/cron.js": { "maxDuration": 60 }
+  }
+}

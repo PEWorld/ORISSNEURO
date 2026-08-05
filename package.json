@@ -1,0 +1,19 @@
+{
+  "name": "kie-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram-бот поверх KIE AI: GPT Image 2, Kling 2.5 Turbo Pro, Seedance 2.0",
+  "scripts": {
+    "dev": "node dev.js",
+    "start": "node dev.js",
+    "set-webhook": "node scripts/set-webhook.mjs",
+    "drop-webhook": "node scripts/set-webhook.mjs --drop"
+  },
+  "dependencies": {
+    "grammy": "^1.30.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
