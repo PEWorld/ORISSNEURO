@@ -156,6 +156,7 @@ console.log('\n— полный цикл генерации (KIE замокан)
   // Подменяем сеть: настоящий KIE не дёргается, кредиты не тратятся.
   let kie = [];
   let mode = 'ok';
+  let balance = 840;
   const reply = (o) => new Response(JSON.stringify(o), { headers: { 'content-type': 'application/json' } });
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
@@ -168,6 +169,7 @@ console.log('\n— полный цикл генерации (KIE замокан)
       if (mode === 'broken') return reply({ code: 402, msg: 'not enough credits' });
       return reply({ code: 200, msg: 'success', data: { taskId: 'task_test' } });
     }
+    if (u.includes('/chat/credit')) return reply({ code: 200, msg: 'success', data: balance });
     if (u.includes('/jobs/recordInfo')) {
       return reply({
         code: 200, msg: 'success',
@@ -187,14 +189,44 @@ console.log('\n— полный цикл генерации (KIE замокан)
     return false;
   };
 
-  // text-to-image
+  // подтверждение перед генерацией
   await store.del('done:task_test');
   await send(text('/image'));
+  await send(text('/set resolution 2K'));
   kie = [];
   calls = [];
   await bot.handleUpdate(text('кот в скафандре'));
+  ok('до подтверждения задача не создаётся', !kie.some((x) => x.u.includes('createTask')));
+  const confirm = lastText(calls);
+  ok('в окне виден промпт', confirm.includes('кот в скафандре'));
+  ok('в окне видно качество', /Качество: 2K/.test(confirm));
+  ok('в окне виден баланс', /Кредитов у вас: <b>840<\/b>/.test(confirm));
+  ok('цена 2K посчитана верно', /Будет потрачено: <b>10<\/b>/.test(confirm));
+  ok('показан остаток', /Останется: <b>830<\/b>/.test(confirm));
+  const btns = buttons(calls);
+  ok('есть обе кнопки', btns.some((b) => b.includes('::go|')) && btns.some((b) => b.includes('::no|')));
+
+  // отмена ничего не запускает
+  const jobId = btns.find((b) => b.includes('::go|')).split('::go|')[1];
+  kie = [];
+  const cancelled = await send(tap(`no|${jobId}`));
+  ok('отмена не создаёт задачу', !kie.some((x) => x.u.includes('createTask')));
+  ok('отмена видна в чате', /Отменено/.test(lastText(cancelled)));
+  const stale = await send(tap(`go|${jobId}`));
+  ok('повторное нажатие после отмены не стреляет', !kie.some((x) => x.u.includes('createTask')));
+  ok('устаревшее подтверждение сообщает об этом', /устарел/.test(lastText(stale)));
+
+  // подтверждение запускает
+  kie = [];
+  calls = [];
+  await bot.handleUpdate(text('кот в скафандре'));
+  const id2 = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+  kie = [];
+  calls = [];
+  await bot.handleUpdate(tap(`go|${id2}`));
   const created = kie.find((x) => x.u.includes('createTask'));
-  ok('createTask ушёл', !!created);
+  ok('createTask ушёл после подтверждения', !!created);
+  ok('resolution долетел', created?.b.input.resolution === '2K');
   ok('модель text-to-image', created?.b.model === 'gpt-image-2-text-to-image');
   ok('промпт долетел', created?.b.input.prompt === 'кот в скафандре');
   ok('callBackUrl не ставится локально', !('callBackUrl' in (created?.b ?? {})));
@@ -221,11 +253,29 @@ console.log('\n— полный цикл генерации (KIE замокан)
   kie = [];
   calls = [];
   await bot.handleUpdate(text('камера облетает героя'));
+  const klingConfirm = lastText(calls);
+  ok('в окне Kling видна цена 5с', /Будет потрачено: <b>42<\/b>/.test(klingConfirm));
+  ok('в окне Kling виден исходный кадр', /Исходный кадр: 1 шт\./.test(klingConfirm));
+  const idK = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+  kie = [];
+  calls = [];
+  await bot.handleUpdate(tap(`go|${idK}`));
   const tries = kie.filter((x) => x.u.includes('createTask'));
   ok('было две попытки createTask', tries.length === 2);
   ok('первая с image_urls', Array.isArray(tries[0]?.b.input.image_urls));
   ok('вторая с image_url', typeof tries[1]?.b.input.image_url === 'string' && !tries[1]?.b.input.image_urls);
   ok('видео доставлено', await settle(() => calls.some((x) => x.method === 'sendVideo')));
+
+  // /confirm off — промпт уходит сразу
+  mode = 'ok';
+  await store.del('done:task_test');
+  await send(text('/confirm off'));
+  kie = [];
+  calls = [];
+  await bot.handleUpdate(text('без лишних вопросов'));
+  ok('с /confirm off задача создаётся сразу', kie.some((x) => x.u.includes('createTask')));
+  ok('окна подтверждения нет', !buttons(calls).some((b) => b.includes('::go|')));
+  await send(text('/confirm on'));
 
   // честная ошибка показывается пользователю
   mode = 'broken';
@@ -233,8 +283,46 @@ console.log('\n— полный цикл генерации (KIE замокан)
   kie = [];
   calls = [];
   await bot.handleUpdate(text('ещё один дубль'));
+  const idE = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+  kie = [];
+  calls = [];
+  await bot.handleUpdate(tap(`go|${idE}`));
   ok('ошибка KIE видна в чате', /not enough credits/.test(lastText(calls)));
   ok('нет молчаливого ретрая', kie.filter((x) => x.u.includes('createTask')).length === 1);
+
+  // Seedance: цена за секунду и предупреждение о нехватке
+  mode = 'ok';
+  await sess.update(42, (s) => {
+    s.active = 'seedance';
+    s.attachments.seedance = [];
+    return s;
+  });
+  calls = [];
+  await bot.handleUpdate(text('15 секунд одного мира'));
+  const sd = lastText(calls);
+  ok('Seedance 15с/720p = 615', /Будет потрачено: <b>615<\/b>/.test(sd));
+  ok('видна ставка за секунду', /41 кред\.\/с × 15с/.test(sd));
+  ok('остаток посчитан', /Останется: <b>225<\/b>/.test(sd));
+
+  // не хватает кредитов
+  balance = 100;
+  calls = [];
+  await bot.handleUpdate(text('тот же ролик, но денег нет'));
+  const poor = lastText(calls);
+  ok('предупреждает о нехватке кредитов', /не хватает/i.test(poor));
+  ok('остаток не показывается, когда не хватает', !/Останется/.test(poor));
+
+  // видео-референс меняет тариф и делает оценку нижней границей
+  balance = 840;
+  await sess.update(42, (s) => {
+    s.attachments.seedance = [{ kind: 'video', url: 'https://cdn.example/ref.mp4', name: 'ref.mp4' }];
+    return s;
+  });
+  calls = [];
+  await bot.handleUpdate(text('с видео-референсом'));
+  const withVid = lastText(calls);
+  ok('тариф с видео на входе — 25/с', /25 кред\.\/с/.test(withVid));
+  ok('оценка помечена как нижняя граница', /Будет потрачено: <b>от 375<\/b>/.test(withVid));
 }
 
 await store.del('u:42');

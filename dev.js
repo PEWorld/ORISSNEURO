@@ -38,6 +38,7 @@ await bot.api.setMyCommands([
   { command: 'files', description: 'Приложенные файлы' },
   { command: 'clear', description: 'Убрать приложенные файлы' },
   { command: 'reset', description: 'Параметры по умолчанию' },
+  { command: 'confirm', description: 'Окно подтверждения перед генерацией' },
   { command: 'credits', description: 'Остаток кредитов KIE' },
   { command: 'help', description: 'Справка' },
 ]);

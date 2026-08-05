@@ -4,6 +4,7 @@ import * as session from './session.js';
 import * as store from './storage.js';
 import { createTask, getCredits, getTask, waitForTask, uploadBuffer } from './kie.js';
 import { callbackUrl, deliver, escapeHtml } from './deliver.js';
+import { estimate, formatEstimate } from './pricing.js';
 
 const MK = Object.keys(MODELS); // ['image','kling','seedance'] — индексы в callback_data
 
@@ -92,6 +93,19 @@ export function createBot(token) {
       return s;
     });
     await ctx.reply(await settingsText(s), { parse_mode: 'HTML', reply_markup: settingsKeyboard(s) });
+  });
+
+  bot.command('confirm', async (ctx) => {
+    const arg = (ctx.match || '').trim().toLowerCase();
+    const s = await session.update(ctx.from.id, (s) => {
+      s.confirm = arg === 'on' ? true : arg === 'off' ? false : s.confirm === false;
+      return s;
+    });
+    await ctx.reply(
+      s.confirm
+        ? 'Окно подтверждения включено — перед каждой генерацией покажу параметры и цену.'
+        : 'Окно подтверждения выключено — промпт уходит в работу сразу. Вернуть: /confirm on'
+    );
   });
 
   bot.command('clear', async (ctx) => {
@@ -237,6 +251,22 @@ export function createBot(token) {
     const [action, a, b, c] = ctx.callbackQuery.data.split('|');
     const userId = ctx.from.id;
 
+    if (action === 'go' || action === 'no') {
+      const s = await session.load(userId);
+      const job = s.pendingJob;
+      if (!job || job.id !== a) {
+        await ctx.answerCallbackQuery('Это подтверждение уже неактуально');
+        return safeEdit(ctx, '⌛️ Запрос устарел — пришли промпт заново.', undefined);
+      }
+      await session.update(userId, (s) => ((s.pendingJob = null), s));
+      if (action === 'no') {
+        await ctx.answerCallbackQuery('Отменено');
+        return safeEdit(ctx, `✖️ Отменено — <b>${job.label}</b>`, undefined);
+      }
+      await ctx.answerCallbackQuery('Погнали');
+      return execute(ctx, job, ctx.callbackQuery.message?.message_id);
+    }
+
     if (action === 'm') {
       const s = await session.update(userId, (s) => {
         s.active = MK[+a];
@@ -334,11 +364,45 @@ async function runGeneration(ctx, prompt, rawPayload) {
     return ctx.reply(`⚠️ ${err.message}`);
   }
 
-  const label = `${def.emoji} ${def.label}`;
-  const status = await ctx.reply(`⏳ <b>${label}</b>\n<code>${escapeHtml(model)}</code>\nсоздаю задачу…`, {
+  const job = { model, input, kind: def.resultKind, label: `${def.emoji} ${def.label}` };
+
+  if (s.confirm === false) return execute(ctx, job);
+
+  // Показываем, что именно уйдёт в KIE и во сколько это обойдётся.
+  const id = Math.random().toString(36).slice(2, 8);
+  await session.update(ctx.from.id, (s) => ((s.pendingJob = { id, ...job }), s));
+  await ctx.reply(await confirmText(job), {
     parse_mode: 'HTML',
+    reply_markup: new InlineKeyboard()
+      .text('✅ Генерить', `go|${id}`)
+      .text('✖️ Отмена', `no|${id}`),
   });
-  const meta = { c: ctx.chat.id, m: status.message_id, k: def.resultKind, l: label };
+}
+
+// Собственно запуск задачи. statusId — сообщение, которое надо превратить в статус
+// (при подтверждении это само окно подтверждения, чтобы не плодить сообщения).
+async function execute(ctx, job, statusId) {
+  const { model, input, label } = job;
+
+  let statusMessageId = statusId;
+  if (statusMessageId) {
+    await ctx.api
+      .editMessageText(
+        ctx.chat.id,
+        statusMessageId,
+        `⏳ <b>${label}</b>\n<code>${escapeHtml(model)}</code>\nсоздаю задачу…`,
+        { parse_mode: 'HTML' }
+      )
+      .catch(() => {});
+  } else {
+    const status = await ctx.reply(
+      `⏳ <b>${label}</b>\n<code>${escapeHtml(model)}</code>\nсоздаю задачу…`,
+      { parse_mode: 'HTML' }
+    );
+    statusMessageId = status.message_id;
+  }
+  const meta = { c: ctx.chat.id, m: statusMessageId, k: job.kind, l: label };
+  const status = { message_id: statusMessageId };
 
   let taskId;
   try {
@@ -379,6 +443,77 @@ async function runGeneration(ctx, prompt, rawPayload) {
           .catch(() => {})
       );
   }
+}
+
+// Человеческие имена для полей, которые уходят в API.
+const FIELD_LABELS = {
+  resolution: 'Качество',
+  aspect_ratio: 'Соотношение',
+  duration: 'Длительность',
+  cfg_scale: 'Следование промпту',
+  negative_prompt: 'Негатив',
+  sound: 'Звук',
+  generate_audio: 'Звук',
+  web_search: 'Поиск в вебе',
+  nsfw_checker: 'NSFW-фильтр',
+};
+
+const COUNT_LABELS = {
+  input_urls: 'Референсы',
+  image_urls: 'Исходный кадр',
+  reference_image_urls: 'Референсы',
+  reference_video_urls: 'Видео-референсы',
+  reference_audio_urls: 'Аудио-референсы',
+};
+
+async function confirmText({ model, input, label }) {
+  const lines = [`<b>${label}</b>`, `<code>${escapeHtml(model)}</code>`, ''];
+
+  const promptText = String(input.prompt);
+  lines.push(
+    `<b>Промпт:</b> ${escapeHtml(
+      promptText.length > 300 ? promptText.slice(0, 300) + '…' : promptText
+    )}`,
+    ''
+  );
+
+  for (const [key, value] of Object.entries(input)) {
+    if (key === 'prompt') continue;
+    if (Array.isArray(value)) {
+      lines.push(`${COUNT_LABELS[key] ?? key}: ${value.length} шт.`);
+    } else if (key === 'first_frame_url') {
+      lines.push('Первый кадр: задан');
+    } else if (key === 'last_frame_url') {
+      lines.push('Последний кадр: задан');
+    } else if (typeof value === 'boolean') {
+      lines.push(`${FIELD_LABELS[key] ?? key}: ${value ? 'вкл' : 'выкл'}`);
+    } else {
+      const suffix = key === 'duration' ? ' с' : '';
+      lines.push(`${FIELD_LABELS[key] ?? key}: ${escapeHtml(String(value))}${suffix}`);
+    }
+  }
+
+  const est = estimate(model, input);
+  let balance = null;
+  try {
+    balance = await getCredits();
+  } catch { /* баланс не критичен — покажем без него */ }
+
+  lines.push('');
+  if (balance != null) lines.push(`Кредитов у вас: <b>${balance}</b>`);
+  lines.push(`Будет потрачено: <b>${formatEstimate(est)}</b>`);
+  if (est?.note) lines.push(`<i>${escapeHtml(est.note)}</i>`);
+
+  if (balance != null && est) {
+    if (est.min > balance) {
+      lines.push('', '⚠️ <b>Кредитов не хватает</b> — KIE, скорее всего, откажет.');
+    } else if (est.max !== Infinity) {
+      lines.push(`Останется: <b>${Math.round((balance - est.max) * 100) / 100}</b>`);
+    }
+  }
+
+  lines.push('', 'Всё верно?');
+  return lines.join('\n');
 }
 
 function reportFail(ctx, messageId, label, message) {
@@ -521,6 +656,9 @@ const HELP = `<b>KIE AI прямо в телеге</b>
 /reset — параметры по умолчанию
 /files — что сейчас приложено
 /clear — убрать приложенные файлы
+
+<b>Перед запуском</b>
+Показываю окно с параметрами и ценой — генерация стартует только после «Генерить». /confirm off отключает окно, /confirm on возвращает.
 
 <b>Сырой API</b>
 /model &lt;id&gt; — свой model id (/model reset — обратно)

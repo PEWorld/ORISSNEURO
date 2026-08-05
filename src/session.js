@@ -11,7 +11,15 @@ export function emptySession() {
     params[k] = defaultParams(k);
     attachments[k] = [];
   }
-  return { active: 'image', params, attachments, awaiting: null, modelOverride: null };
+  return {
+    active: 'image',
+    params,
+    attachments,
+    awaiting: null,
+    modelOverride: null,
+    confirm: true,
+    pendingJob: null,
+  };
 }
 
 export async function load(userId) {
