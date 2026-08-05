@@ -7,7 +7,7 @@
 import { InlineKeyboard } from 'grammy';
 import * as store from './storage.js';
 import { resultUrls } from './kie.js';
-import { pre, captionPlan, clip, sendAlbumSmart } from './render.js';
+import { pre, captionPlan, clip, sendMediaSetSmart } from './render.js';
 import { escapeHtml } from './html.js';
 import { approvalChatId } from './roles.js';
 
@@ -73,20 +73,24 @@ async function renderFrame(api, fid) {
     return;
   }
 
-  const { caption, overflow } = captionPlan(frame.prompt);
-  await sendAlbumSmart(
+  const note = failed ? `⚠️ Из ${frame.count} генераций получилось ${urls.length}.` : '';
+  const { caption, overflow } = captionPlan(frame.prompt, note);
+  const keyboard = new InlineKeyboard().text('📤 Отправить на согласование', `apv|${fid}`);
+
+  // Одна картинка укладывается в одно сообщение вместе с промптом и кнопкой.
+  // Двум и больше Telegram кнопку прицепить не даст — тогда она едет отдельно.
+  await sendMediaSetSmart(
     api,
     frame.chatId,
-    urls.map((url, i) => ({ type: 'photo', url, ...(i === 0 && caption ? { caption } : {}) }))
+    urls.map((url, i) => ({ type: 'photo', url, ...(i === 0 && caption ? { caption } : {}) })),
+    urls.length === 1 ? { reply_markup: keyboard } : {}
   );
   if (overflow) {
     await api.sendMessage(frame.chatId, overflow, { parse_mode: 'HTML' });
   }
-
-  const note = failed ? `\n⚠️ Из ${frame.count} генераций получилось ${urls.length}.` : '';
-  await api.sendMessage(frame.chatId, `✅ Кадр готов${note}`, {
-    reply_markup: new InlineKeyboard().text('📤 Отправить на согласование', `apv|${fid}`),
-  });
+  if (urls.length > 1) {
+    await api.sendMessage(frame.chatId, '✅ Кадр готов', { reply_markup: keyboard });
+  }
 
   await saveFrame(fid, { ...frame, rendered: true, urls });
 }
@@ -110,7 +114,7 @@ export async function sendForApproval(api, fid, note, from) {
   const { caption, overflow } = captionPlan(frame.prompt, header);
 
   // Документами — чтобы Telegram не пережал картинки.
-  await sendAlbumSmart(
+  await sendMediaSetSmart(
     api,
     chatId,
     urls.map((url, i) => ({ type: 'document', url, ...(i === 0 && caption ? { caption } : {}) }))

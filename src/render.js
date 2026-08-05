@@ -46,6 +46,24 @@ function nameFor(url, fallback) {
 }
 
 /**
+ * Отправляет набор файлов одним сообщением, если он один, и альбомом, если их
+ * несколько. Разница принципиальная: к одиночному медиа Telegram разрешает и
+ * подпись, и инлайн-кнопки, а к альбому — только подпись.
+ * @param items [{ url, type: 'photo'|'document', caption? }]
+ * @param extra доп. поля (например reply_markup) — доедут только при одном файле
+ */
+export async function sendMediaSetSmart(api, chatId, items, extra = {}) {
+  if (items.length === 1) {
+    const it = items[0];
+    return sendMediaSmart(api, chatId, it.type, it.url, {
+      ...(it.caption ? { caption: it.caption, parse_mode: 'HTML' } : {}),
+      ...extra,
+    });
+  }
+  return sendAlbumSmart(api, chatId, items);
+}
+
+/**
  * Отправляет альбом. Сначала пробует отдать Telegram ссылки — так быстрее и не
  * тратит трафик. Если Telegram не смог их забрать (размер, таймаут, CDN),
  * качаем сами и грузим файлами.

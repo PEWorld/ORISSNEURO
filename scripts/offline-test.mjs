@@ -345,8 +345,10 @@ const withVid = lastText(calls);
 ok('тариф с видео на входе — 25/с', /25 кред\.\/с/.test(withVid));
 ok('оценка помечена как нижняя граница', /Будет потрачено: <b>от 375<\/b>/.test(withVid));
 
+
 console.log('\n— ветка креатора —');
 await store.del('u:77');
+let approvalFid = null;
 {
   ok('владельческие команды креатору недоступны',
     !/aspect_ratio/.test(lastText(await send(ctext('/settings')))));
@@ -359,52 +361,53 @@ await store.del('u:77');
   const cc = lastText(calls);
   ok('задача не создаётся до подтверждения', !createTasks().length);
   ok('промпт моноширинный', /<pre>дорога в тумане<\/pre>/.test(cc));
-  ok('видно 2 варианта, 21:9, 1K', /<b>2<\/b>/.test(cc) && /21:9/.test(cc) && /1K/.test(cc));
+  ok('видно формат 21:9 и 1K', /21:9/.test(cc) && /1K/.test(cc));
+  ok('про варианты не пишем, раз он один', !/Вариантов/.test(cc));
   ok('цены креатору не показываются', !/Кредит/i.test(cc) && !/потрачено/i.test(cc));
   const cbtns = buttons(calls);
   ok('кнопка генерации есть', cbtns.some((b) => b.includes('::cgo|')));
 
-  // подтверждение → две задачи с фиксированным пресетом
+  // подтверждение → ровно одна задача с фиксированным пресетом
   const cid = cbtns.find((b) => b.includes('::cgo|')).split('::cgo|')[1];
-  const anchorId = msgId;
   kie = [];
   calls = [];
-  await bot.handleUpdate(ctap(`cgo|${cid}`, anchorId));
+  await bot.handleUpdate(ctap(`cgo|${cid}`, msgId));
   const ct = createTasks();
-  ok('создано ровно 2 задачи', ct.length === 2);
-  ok('обе с одним промптом',
-    ct[0]?.b.input.prompt === 'дорога в тумане' && ct[1]?.b.input.prompt === 'дорога в тумане');
-  ok('формат 21:9 зафиксирован', ct.every((x) => x.b.input.aspect_ratio === '21:9'));
-  ok('качество 1K зафиксировано', ct.every((x) => x.b.input.resolution === '1K'));
+  ok('создана ровно одна задача', ct.length === 1);
+  ok('промпт долетел', ct[0]?.b.input.prompt === 'дорога в тумане');
+  ok('формат 21:9 зафиксирован', ct[0]?.b.input.aspect_ratio === '21:9');
+  ok('качество 1K зафиксировано', ct[0]?.b.input.resolution === '1K');
   const anchor = calls.find((x) => x.method === 'editMessageText')?.payload.text ?? '';
   ok('статус — «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(anchor));
 
-  ok('дождались сборки кадра', await settle(() => called(calls, 'sendMediaGroup').length > 0));
-  const album = called(calls, 'sendMediaGroup')[0];
-  ok('в альбоме 2 фото', album?.payload.media.length === 2);
-  ok('это разные генерации', album.payload.media[0].media !== album.payload.media[1].media);
-  ok('промпт в подписи альбома', /<pre>дорога в тумане<\/pre>/.test(album.payload.media[0].caption ?? ''));
-  ok('альбом отрисован ровно один раз', called(calls, 'sendMediaGroup').length === 1);
+  ok('дождались кадра', await settle(() => called(calls, 'sendPhoto').length > 0));
+  ok('альбом не используется', !called(calls, 'sendMediaGroup').length);
+  const shot = called(calls, 'sendPhoto')[0];
+  ok('картинка, промпт и кнопка — одним сообщением',
+    !!shot.payload.photo &&
+    /<pre>дорога в тумане<\/pre>/.test(shot.payload.caption ?? '') &&
+    !!shot.payload.reply_markup);
+  ok('отдельного «Кадр готов» больше нет',
+    !calls.some((x) => x.method === 'sendMessage' && /Кадр готов/.test(x.payload.text ?? '')));
   ok('«в процессе» удалено', called(calls, 'deleteMessage').length > 0);
+  ok('кадр отрисован один раз', called(calls, 'sendPhoto').length === 1);
 
-  const done = calls.find((x) => x.method === 'sendMessage' && /Кадр готов/.test(x.payload.text ?? ''));
-  ok('сообщение «Кадр готов» есть', !!done);
-  const apvBtn = done?.payload.reply_markup?.inline_keyboard?.flat()?.[0];
+  const apvBtn = shot.payload.reply_markup.inline_keyboard.flat()[0];
   ok('кнопка согласования на месте', apvBtn?.callback_data?.startsWith('apv|'));
 
   // согласование
   const fid = apvBtn.callback_data.split('|')[1];
+  approvalFid = fid;
   let c = await send(ctap(`apv|${fid}`));
   ok('спрашивает номер кадра', /номер кадра/i.test(lastText(c)));
 
   calls = [];
   await bot.handleUpdate(ctext('кадр 12, вариант с туманом'));
-  const sent = called(calls, 'sendMediaGroup')[0];
-  ok('владельцу ушёл альбом', !!sent);
+  const sent = called(calls, 'sendDocument')[0];
+  ok('владельцу ушёл документ', !!sent);
   ok('адресат — владелец', String(sent?.payload.chat_id) === '42');
-  ok('отправлено документами, без сжатия', sent?.payload.media.every((m) => m.type === 'document'));
-  ok('обе картинки на месте', sent?.payload.media.length === 2);
-  const cap = sent?.payload.media[0].caption ?? '';
+  ok('без сжатия, не фото', !called(calls, 'sendPhoto').length);
+  const cap = sent?.payload.caption ?? '';
   ok('в подписи промпт моноширинным', /<pre>дорога в тумане<\/pre>/.test(cap));
   ok('в подписи текст креатора', /кадр 12, вариант с туманом/.test(cap));
   ok('видно от кого', /@creator/.test(cap));
@@ -415,7 +418,7 @@ await store.del('u:77');
   ok('кнопку можно нажать снова', /номер кадра/i.test(lastText(c)));
   calls = [];
   await bot.handleUpdate(ctext('ещё раз'));
-  ok('повторная отправка проходит', called(calls, 'sendMediaGroup').length === 1);
+  ok('повторная отправка проходит', called(calls, 'sendDocument').length === 1);
 
   // параллельная работа над несколькими кадрами
   calls = [];
@@ -429,10 +432,53 @@ await store.del('u:77');
 
   calls = [];
   await bot.handleUpdate(ctap(`cgo|${idB}`, anchorB));
-  await settle(() => called(calls, 'sendMediaGroup').length > 0);
-  const albumB = called(calls, 'sendMediaGroup')[0];
+  await settle(() => called(calls, 'sendPhoto').length > 0);
+  const shotB = called(calls, 'sendPhoto')[0];
   ok('второй кадр собрался со своим промптом',
-    /<pre>второй кадр<\/pre>/.test(albumB?.payload.media[0].caption ?? ''));
+    /<pre>второй кадр<\/pre>/.test(shotB?.payload.caption ?? ''));
+}
+
+console.log('\n— несколько картинок на кадр (CREATOR_GENERATIONS > 1) —');
+{
+  // Проверяем ветку, которая включается переменной: кнопку к альбому Telegram
+  // не разрешает, поэтому она должна ехать отдельным сообщением.
+  const frames = await import('../src/frames.js');
+  const fid = frames.newFrameId();
+  await frames.saveFrame(fid, { chatId: 77, userId: 77, prompt: 'два варианта', anchorMsgId: 1, count: 2 });
+  calls = [];
+  await frames.onFrameTaskDone(bot.api, { f: fid, i: 0 }, `t_${RUN}_a`,
+    { state: 'success', resultJson: JSON.stringify({ resultUrls: ['https://cdn.example/a.png'] }) });
+  ok('после первой из двух ничего не рисуется', !called(calls, 'sendMediaGroup').length);
+
+  calls = [];
+  await frames.onFrameTaskDone(bot.api, { f: fid, i: 1 }, `t_${RUN}_b`,
+    { state: 'success', resultJson: JSON.stringify({ resultUrls: ['https://cdn.example/b.png'] }) });
+  const album = called(calls, 'sendMediaGroup')[0];
+  ok('две картинки уходят альбомом', album?.payload.media.length === 2);
+  ok('промпт в подписи альбома', /<pre>два варианта<\/pre>/.test(album?.payload.media[0].caption ?? ''));
+  const done = calls.find((x) => x.method === 'sendMessage' && /Кадр готов/.test(x.payload.text ?? ''));
+  ok('кнопка приехала отдельным сообщением', !!done?.payload.reply_markup);
+
+  // один из двух упал
+  const fid2 = frames.newFrameId();
+  await frames.saveFrame(fid2, { chatId: 77, userId: 77, prompt: 'половина', anchorMsgId: 1, count: 2 });
+  await frames.onFrameTaskDone(bot.api, { f: fid2, i: 0 }, `t_${RUN}_c`, { state: 'fail', failMsg: 'boom' });
+  calls = [];
+  await frames.onFrameTaskDone(bot.api, { f: fid2, i: 1 }, `t_${RUN}_d`,
+    { state: 'success', resultJson: JSON.stringify({ resultUrls: ['https://cdn.example/c.png'] }) });
+  const survivor = called(calls, 'sendPhoto')[0];
+  ok('уцелевшая картинка всё равно доходит', called(calls, 'sendPhoto').length === 1);
+  ok('о потере предупреждают прямо в подписи',
+    /Из 2 генераций получилось 1/.test(survivor?.payload.caption ?? ''));
+  ok('кнопка согласования при этом на месте', !!survivor?.payload.reply_markup);
+
+  // обе упали
+  const fid3 = frames.newFrameId();
+  await frames.saveFrame(fid3, { chatId: 77, userId: 77, prompt: 'мимо', anchorMsgId: 1, count: 1 });
+  calls = [];
+  await frames.onFrameTaskDone(bot.api, { f: fid3, i: 0 }, `t_${RUN}_e`, { state: 'fail', failMsg: 'boom' });
+  ok('полный провал объясняется текстом', /не получился/.test(lastText(calls)));
+  ok('и промпт при этом виден', /<pre>мимо<\/pre>/.test(lastText(calls)));
 }
 
 await store.del('u:42');

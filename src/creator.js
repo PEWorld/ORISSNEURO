@@ -9,18 +9,22 @@ import { pre } from './render.js';
 import { ingestFile } from './ingest.js';
 import { newFrameId, saveFrame, sendForApproval } from './frames.js';
 
-const GENERATIONS = 2;
+// Сколько картинок на один промпт. Одна укладывается в одно сообщение вместе
+// с кнопкой; при двух и больше кнопка поедет отдельным сообщением.
+const GENERATIONS = Math.max(1, Number(process.env.CREATOR_GENERATIONS) || 1);
 const ASPECT = '21:9';
 const RESOLUTION = '1K';
 const MAX_REFS = 16;
 
 const HELP = `<b>Генерация кадров</b>
 
-Пришли промпт текстом — на него сделаю ${GENERATIONS} варианта в формате ${ASPECT}, ${RESOLUTION}.
+Пришли промпт текстом — сделаю кадр в формате ${ASPECT}, ${RESOLUTION}${
+  GENERATIONS > 1 ? ` (${GENERATIONS} варианта)` : ''
+}.
 
 Можно приложить картинки-референсы (до ${MAX_REFS}) — тогда кадр строится по ним. /clear убирает их.
 
-Когда кадр готов, под ним появится кнопка «Отправить на согласование». Нажать можно сразу или потом — кнопка не пропадает. Бот спросит номер кадра, туда можно писать что угодно.
+У готового кадра есть кнопка «Отправить на согласование». Нажать можно сразу или потом — кнопка не пропадает. Бот спросит номер кадра, туда можно писать что угодно.
 
 Пока ждёшь один кадр, спокойно запускай следующие — они не мешают друг другу.`;
 
@@ -120,7 +124,8 @@ async function proposeFrame(ctx, prompt) {
   const lines = [
     '<b>Промпт:</b>',
     pre(prompt),
-    `Вариантов: <b>${GENERATIONS}</b> · Формат: <b>${ASPECT}</b> · Качество: <b>${RESOLUTION}</b>`,
+    `Формат: <b>${ASPECT}</b> · Качество: <b>${RESOLUTION}</b>` +
+      (GENERATIONS > 1 ? ` · Вариантов: <b>${GENERATIONS}</b>` : ''),
   ];
   if (refs.length) lines.push(`Референсы: <b>${refs.length} шт.</b>`);
   lines.push('', 'Генерируем?');
