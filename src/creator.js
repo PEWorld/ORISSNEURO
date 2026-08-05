@@ -5,7 +5,7 @@ import * as session from './session.js';
 import * as store from './storage.js';
 import { createTask, waitForTask } from './kie.js';
 import { callbackUrl, deliver, rememberJob, escapeHtml } from './deliver.js';
-import { pre, captionPlan, PROMPT_LABEL, WAITING_HEADER } from './render.js';
+import { pre, captionPlan, sendWaiting, PROMPT_LABEL, WAITING_HEADER } from './render.js';
 import { placeholderMedia, rememberPlaceholder, wide } from './placeholder.js';
 import { ingestFile } from './ingest.js';
 import { newFrameId, saveFrame, sendForApproval } from './frames.js';
@@ -96,12 +96,15 @@ export function creatorComposer() {
 
     if (action === 'cgo' || action === 'cno') {
       const s = await session.load(ctx.from.id);
-      const pending = s.pendingFrame;
-      if (!pending || pending.id !== arg) {
+      const pending = s.pendingFrames?.[arg];
+      if (!pending) {
         await ctx.answerCallbackQuery('Этот запрос уже неактуален');
         return editSafe(ctx, '⌛️ Запрос устарел — пришли промпт заново.');
       }
-      await session.update(ctx.from.id, (s) => ((s.pendingFrame = null), s));
+      await session.update(ctx.from.id, (s) => {
+        delete s.pendingFrames[arg];
+        return s;
+      });
       if (action === 'cno') {
         await ctx.answerCallbackQuery('Отменено');
         return editSafe(ctx, '✖️ Отменено.');
@@ -120,7 +123,10 @@ async function proposeFrame(ctx, prompt) {
   const s = await session.load(ctx.from.id);
   const refs = s.attachments.image.map((a) => a.url);
   const id = Math.random().toString(36).slice(2, 8);
-  await session.update(ctx.from.id, (s) => ((s.pendingFrame = { id, prompt, refs }), s));
+  await session.update(ctx.from.id, (s) => {
+    s.pendingFrames = session.remember(s.pendingFrames, id, { id, prompt, refs });
+    return s;
+  });
 
   const lines = [
     '<b>Промпт:</b>',
@@ -148,10 +154,12 @@ async function startFrame(ctx, pending) {
   // результат окажется здесь же, а не улетит вниз чата.
   await ctx.api.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id).catch(() => {});
   const { caption } = captionPlan(prompt, WAITING_HEADER);
-  const { media, cached } = await placeholderMedia('wide', wide);
-  const anchor = await ctx.replyWithPhoto(media, { caption, parse_mode: 'HTML' });
-  const anchorId = anchor.message_id;
-  if (!cached) await rememberPlaceholder('wide', anchor);
+  const { messageId: anchorId } = await sendWaiting(
+    ctx,
+    caption,
+    await placeholderMedia('wide', wide),
+    (msg) => rememberPlaceholder('wide', msg)
+  );
 
   await saveFrame(fid, {
     chatId: ctx.chat.id,

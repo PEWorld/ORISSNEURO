@@ -7,6 +7,7 @@
 // PNG собираем руками, чтобы не тащить зависимость: сплошная заливка сжимается
 // в пару сотен байт.
 import zlib from 'node:zlib';
+import { InputFile } from 'grammy';
 import * as store from './storage.js';
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -61,12 +62,15 @@ const CACHE_KEY = (name) => `ph:${name}`;
 
 /**
  * Отдаёт то, что можно передать в sendPhoto: сохранённый file_id, если заглушку
- * уже загружали, иначе свежий буфер. Загружать её каждый раз незачем.
+ * уже загружали, иначе свежий файл. Загружать её каждый раз незачем.
+ *
+ * Именно InputFile, а не голый Buffer: файлом grammy считает только его, буфер
+ * молча уехал бы в JSON и Telegram отбил бы запрос.
  */
 export async function placeholderMedia(name, make) {
   const cached = await store.get(CACHE_KEY(name));
   if (cached) return { media: cached, cached: true };
-  return { media: make(), cached: false };
+  return { media: new InputFile(make(), `${name}.png`), cached: false };
 }
 
 /** Запоминает file_id только что отправленной заглушки. */

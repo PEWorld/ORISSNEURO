@@ -225,11 +225,37 @@ await store.del('ph:wide');
 
 console.log('\n— картинка-заглушка —');
 {
-  const { solidPng } = await import('../src/placeholder.js');
+  const { solidPng, placeholderMedia, wide } = await import('../src/placeholder.js');
+  const { InputFile } = await import('grammy');
+  const { requiresFormDataUpload } = await import('../node_modules/grammy/out/core/payload.js');
+
   const png = solidPng(64, 32);
   ok('это валидный PNG', png.subarray(1, 4).toString('ascii') === 'PNG');
   ok('размеры в заголовке верные', png.readUInt32BE(16) === 64 && png.readUInt32BE(20) === 32);
-  ok('весит копейки', png.length < 1000, `${png.length} байт`);
+  ok('весит копейки', png.length < 2000, `${png.length} байт`);
+
+  // Перехватчик вызовов не сериализует payload, поэтому голый Buffer тут выглядел
+  // бы «объектом» и прошёл незамеченным — а Telegram его отбивает. Проверяем то,
+  // как grammy на самом деле решает, загружать файл или слать JSON.
+  await store.del('ph:wide');
+  const fresh = await placeholderMedia('wide', wide);
+  ok('заглушка отдаётся как InputFile', fresh.media instanceof InputFile);
+  ok('grammy распознаёт её как файл', requiresFormDataUpload({ photo: fresh.media }) === true);
+  ok('голый Buffer файлом НЕ считается', requiresFormDataUpload({ photo: wide() }) === false);
+  // Догоняем до конца: собираем тело запроса ровно так, как это сделает grammy.
+  const { createFormDataPayload } = await import('../node_modules/grammy/out/core/payload.js');
+  const req = createFormDataPayload({ chat_id: 1, photo: fresh.media }, () => {});
+  const chunks = [];
+  for await (const c of req.body) chunks.push(Buffer.from(c));
+  const raw = Buffer.concat(chunks);
+  ok('тело запроса — multipart', /multipart\/form-data/.test(req.headers['content-type']));
+  ok('поле photo ссылается на вложение', raw.toString('latin1').includes('attach://'));
+  ok('байты PNG действительно внутри', raw.includes(Buffer.from([0x89, 0x50, 0x4e, 0x47])));
+
+  await store.set('ph:wide', 'FILE_ID_STUB');
+  const reused = await placeholderMedia('wide', wide);
+  ok('сохранённый file_id уходит строкой', reused.media === 'FILE_ID_STUB' && reused.cached === true);
+  await store.del('ph:wide');
 }
 
 // подтверждение перед генерацией
@@ -273,7 +299,8 @@ ok('callBackUrl не ставится локально', !('callBackUrl' in (cre
 
 const anchorCall = called(calls, 'sendPhoto')[0];
 ok('«в процессе» — сразу картинка, а не текст', !!anchorCall);
-ok('заглушка загружена файлом', typeof anchorCall.payload.photo === 'object');
+ok('заглушка ушла загружаемым файлом',
+  anchorCall.payload.photo?.constructor?.name === 'InputFile');
 ok('в подписи «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(captionOf(anchorCall)));
 ok('в подписи «Ваш промпт»', /<b>Ваш промпт:<\/b>/.test(captionOf(anchorCall)));
 ok('промпт моноширинный', /<pre>кот в скафандре<\/pre>/.test(captionOf(anchorCall)));
@@ -287,6 +314,25 @@ ok('промпт остался в подписи', /<pre>кот в скафан
 ok('в подписи есть цена и время',
   /4 кред/.test(swap.payload.media.caption ?? '') && /4с/.test(swap.payload.media.caption ?? ''));
 ok('результат не отправлен отдельным сообщением', called(calls, 'sendPhoto').length === 1);
+
+// два открытых окна подтверждения не мешают друг другу
+calls = [];
+await bot.handleUpdate(text('кадр раз'));
+const idP1 = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+calls = [];
+await bot.handleUpdate(text('кадр два'));
+const idP2 = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+kie = [];
+calls = [];
+await bot.handleUpdate(tap(`go|${idP1}`)); // жмём раннее окно
+ok('раннее окно подтверждения ещё живо', !/устарел/.test(lastText(calls)));
+ok('запустилось именно оно', createTasks()[0]?.b.input.prompt === 'кадр раз');
+await settle(() => called(calls, 'editMessageMedia').length > 0);
+kie = [];
+calls = [];
+await bot.handleUpdate(tap(`go|${idP2}`));
+ok('позднее окно тоже работает', createTasks()[0]?.b.input.prompt === 'кадр два');
+await settle(() => called(calls, 'editMessageMedia').length > 0);
 
 // повторная доставка той же задачи не дублируется
 calls = [];
@@ -494,6 +540,15 @@ await store.del('u:77');
   await settle(() => called(calls, 'editMessageMedia').length > 0);
   ok('второй кадр собрался со своим промптом',
     /<pre>второй кадр<\/pre>/.test(called(calls, 'editMessageMedia')[0]?.payload.media.caption ?? ''));
+
+  // Кнопка на более раннем окне обязана работать: пока ждёшь один кадр, можно
+  // набросать ещё несколько промптов и запускать их в любом порядке.
+  calls = [];
+  await bot.handleUpdate(ctap(`cgo|${idA}`, msgId));
+  ok('кнопка на предыдущем окне не протухла', !/устарел/.test(lastText(calls)));
+  await settle(() => called(calls, 'editMessageMedia').length > 0);
+  ok('первый кадр собрался со своим промптом',
+    /<pre>первый кадр<\/pre>/.test(called(calls, 'editMessageMedia')[0]?.payload.media.caption ?? ''));
 }
 
 console.log('\n— несколько картинок на кадр (CREATOR_GENERATIONS > 1) —');

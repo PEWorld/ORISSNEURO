@@ -8,7 +8,7 @@ import { estimate, formatEstimate } from './pricing.js';
 import { roleOf } from './roles.js';
 import { creatorComposer } from './creator.js';
 import { ingestFile } from './ingest.js';
-import { captionPlan, PROMPT_LABEL } from './render.js';
+import { captionPlan, sendWaiting, PROMPT_LABEL } from './render.js';
 import { placeholderMedia, rememberPlaceholder, standard } from './placeholder.js';
 
 const MK = Object.keys(MODELS); // ['image','kling','seedance'] — индексы в callback_data
@@ -258,12 +258,15 @@ export function createBot(token) {
 
     if (action === 'go' || action === 'no') {
       const s = await session.load(userId);
-      const job = s.pendingJob;
-      if (!job || job.id !== a) {
+      const job = s.pendingJobs?.[a];
+      if (!job) {
         await ctx.answerCallbackQuery('Это подтверждение уже неактуально');
         return safeEdit(ctx, '⌛️ Запрос устарел — пришли промпт заново.', undefined);
       }
-      await session.update(userId, (s) => ((s.pendingJob = null), s));
+      await session.update(userId, (s) => {
+        delete s.pendingJobs[a];
+        return s;
+      });
       if (action === 'no') {
         await ctx.answerCallbackQuery('Отменено');
         return safeEdit(ctx, `✖️ Отменено — <b>${job.label}</b>`, undefined);
@@ -375,7 +378,10 @@ async function runGeneration(ctx, prompt, rawPayload) {
 
   // Показываем, что именно уйдёт в KIE и во сколько это обойдётся.
   const id = Math.random().toString(36).slice(2, 8);
-  await session.update(ctx.from.id, (s) => ((s.pendingJob = { id, ...job }), s));
+  await session.update(ctx.from.id, (s) => {
+    s.pendingJobs = session.remember(s.pendingJobs, id, { id, ...job });
+    return s;
+  });
   await ctx.reply(await confirmText(job), {
     parse_mode: 'HTML',
     reply_markup: new InlineKeyboard()
@@ -399,10 +405,12 @@ async function execute(ctx, job, statusId) {
   const { caption } = captionPlan(String(input.prompt), header);
 
   if (statusId) await ctx.api.deleteMessage(ctx.chat.id, statusId).catch(() => {});
-  const { media, cached } = await placeholderMedia('standard', standard);
-  const status = await ctx.replyWithPhoto(media, { caption, parse_mode: 'HTML' });
-  if (!cached) await rememberPlaceholder('standard', status);
-  const statusMessageId = status.message_id;
+  const { messageId: statusMessageId } = await sendWaiting(
+    ctx,
+    caption,
+    await placeholderMedia('standard', standard),
+    (msg) => rememberPlaceholder('standard', msg)
+  );
   const meta = { c: ctx.chat.id, m: statusMessageId, k: job.kind, l: label };
 
   let taskId;

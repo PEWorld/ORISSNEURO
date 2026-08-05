@@ -102,6 +102,24 @@ export async function sendAlbumSmart(api, chatId, items, extra = {}) {
 }
 
 /**
+ * Отправляет сообщение о ходе работы картинкой-заглушкой, чтобы результат потом
+ * встал на её место. Если отправить картинку не вышло — не молчим, а откатываемся
+ * на обычный текст: доставка тогда просто придёт отдельным сообщением.
+ * @returns {{messageId:number, isMedia:boolean}}
+ */
+export async function sendWaiting(ctx, caption, { media, cached }, remember) {
+  try {
+    const msg = await ctx.replyWithPhoto(media, { caption, parse_mode: 'HTML' });
+    if (!cached) await remember(msg).catch(() => {});
+    return { messageId: msg.message_id, isMedia: true };
+  } catch (err) {
+    console.error('[render] заглушка не отправилась:', err?.description ?? err?.message ?? err);
+    const msg = await ctx.reply(caption, { parse_mode: 'HTML' });
+    return { messageId: msg.message_id, isMedia: false };
+  }
+}
+
+/**
  * Подменяет медиа прямо в существующем сообщении — так результат остаётся на
  * месте «в процессе», а не уезжает вниз чата. Работает только если сообщение
  * уже было медиа: текст в картинку Telegram превратить не даст.

@@ -18,8 +18,10 @@ export function emptySession() {
     awaiting: null,
     modelOverride: null,
     confirm: true,
-    pendingJob: null,
-    pendingFrame: null,
+    // Окон подтверждения может быть открыто несколько сразу — держим их все,
+    // иначе кнопка на любом, кроме последнего, переставала бы работать.
+    pendingJobs: {},
+    pendingFrames: {},
   };
 }
 
@@ -37,11 +39,23 @@ export async function load(userId) {
     attachments: Object.fromEntries(
       Object.keys(MODELS).map((k) => [k, raw.attachments?.[k] || []])
     ),
+    pendingJobs: raw.pendingJobs || {},
+    pendingFrames: raw.pendingFrames || {},
   };
 }
 
 export async function save(userId, session) {
   await store.set(KEY(userId), session);
+}
+
+const PENDING_LIMIT = 20;
+
+/** Добавляет запись, не давая словарю расти бесконечно. */
+export function remember(map, id, value) {
+  const next = { ...(map || {}), [id]: value };
+  const keys = Object.keys(next);
+  for (const k of keys.slice(0, Math.max(0, keys.length - PENDING_LIMIT))) delete next[k];
+  return next;
 }
 
 export async function update(userId, fn) {
