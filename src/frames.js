@@ -7,7 +7,9 @@
 import { InlineKeyboard } from 'grammy';
 import * as store from './storage.js';
 import { resultUrls } from './kie.js';
-import { pre, captionPlan, clip, sendMediaSetSmart } from './render.js';
+import {
+  pre, captionPlan, clip, sendMediaSetSmart, editMediaSmart, PROMPT_LABEL,
+} from './render.js';
 import { escapeHtml } from './html.js';
 import { approvalChatId } from './roles.js';
 
@@ -60,36 +62,39 @@ async function renderFrame(api, fid) {
   const urls = (await collectUrls(fid, frame.count)).filter(Boolean);
   const failed = frame.count - urls.length;
 
-  // Сообщение «в процессе» больше не нужно — результат приходит цельным блоком.
-  await api.deleteMessage(frame.chatId, frame.anchorMsgId).catch(() => {});
-
   if (!urls.length) {
+    await api.deleteMessage(frame.chatId, frame.anchorMsgId).catch(() => {});
     await api.sendMessage(
       frame.chatId,
-      `❌ Кадр не получился, обе генерации упали.\n\n${pre(frame.prompt)}`,
+      `❌ Кадр не получился.\n\n${PROMPT_LABEL}\n${pre(frame.prompt)}`,
       { parse_mode: 'HTML' }
     );
     await store.del(kFrame(fid));
     return;
   }
 
-  const note = failed ? `⚠️ Из ${frame.count} генераций получилось ${urls.length}.` : '';
-  const { caption, overflow } = captionPlan(frame.prompt, note);
+  const note = failed ? `⚠️ Из ${frame.count} генераций получилось ${urls.length}.\n` : '';
+  const { caption, overflow } = captionPlan(frame.prompt, note + PROMPT_LABEL);
   const keyboard = new InlineKeyboard().text('📤 Отправить на согласование', `apv|${fid}`);
 
-  // Одна картинка укладывается в одно сообщение вместе с промптом и кнопкой.
-  // Двум и больше Telegram кнопку прицепить не даст — тогда она едет отдельно.
-  await sendMediaSetSmart(
-    api,
-    frame.chatId,
-    urls.map((url, i) => ({ type: 'photo', url, ...(i === 0 && caption ? { caption } : {}) })),
-    urls.length === 1 ? { reply_markup: keyboard } : {}
-  );
+  if (urls.length === 1) {
+    // Подменяем заглушку на готовый кадр — сообщение остаётся на своём месте.
+    await editMediaSmart(api, frame.chatId, frame.anchorMsgId, 'photo', urls[0], {
+      caption,
+      reply_markup: keyboard,
+    });
+  } else {
+    // Кнопку к альбому Bot API не разрешает, поэтому она едет отдельно.
+    await api.deleteMessage(frame.chatId, frame.anchorMsgId).catch(() => {});
+    await sendMediaSetSmart(
+      api,
+      frame.chatId,
+      urls.map((url, i) => ({ type: 'photo', url, ...(i === 0 && caption ? { caption } : {}) }))
+    );
+    await api.sendMessage(frame.chatId, '✅ Кадр готов', { reply_markup: keyboard });
+  }
   if (overflow) {
     await api.sendMessage(frame.chatId, overflow, { parse_mode: 'HTML' });
-  }
-  if (urls.length > 1) {
-    await api.sendMessage(frame.chatId, '✅ Кадр готов', { reply_markup: keyboard });
   }
 
   await saveFrame(fid, { ...frame, rendered: true, urls });
@@ -109,7 +114,7 @@ export async function sendForApproval(api, fid, note, from) {
   const header =
     `📤 <b>Кадр на согласование</b>\n` +
     `От: ${escapeHtml(who)}\n` +
-    `Подпись: ${escapeHtml(clip(note, 300))}`;
+    `Подпись: ${escapeHtml(clip(note, 300))}\n\n${PROMPT_LABEL}`;
 
   const { caption, overflow } = captionPlan(frame.prompt, header);
 

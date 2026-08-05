@@ -8,7 +8,8 @@ import { estimate, formatEstimate } from './pricing.js';
 import { roleOf } from './roles.js';
 import { creatorComposer } from './creator.js';
 import { ingestFile } from './ingest.js';
-import { pre } from './render.js';
+import { captionPlan, PROMPT_LABEL } from './render.js';
+import { placeholderMedia, rememberPlaceholder, standard } from './placeholder.js';
 
 const MK = Object.keys(MODELS); // ['image','kling','seedance'] — индексы в callback_data
 
@@ -388,23 +389,21 @@ async function runGeneration(ctx, prompt, rawPayload) {
 async function execute(ctx, job, statusId) {
   const { model, input, label } = job;
 
-  // Промпт держим прямо в сообщении о ходе работы: пока ждёшь несколько
-  // генераций сразу, только по нему и видно, какая из них какая.
-  const waiting =
+  // Сообщение о ходе работы сразу отправляем картинкой-заглушкой: текст Telegram
+  // потом в медиа не превратит, а медиа на медиа подменить даст — так результат
+  // окажется на месте ожидания, а не улетит вниз чата. Промпт держим тут же:
+  // пока ждёшь несколько генераций сразу, только по нему и видно, какая из них какая.
+  const header =
     `⏳ <b>Ваша генерация в процессе</b>\n${label} · <code>${escapeHtml(model)}</code>\n\n` +
-    pre(input.prompt);
+    PROMPT_LABEL;
+  const { caption } = captionPlan(String(input.prompt), header);
 
-  let statusMessageId = statusId;
-  if (statusMessageId) {
-    await ctx.api
-      .editMessageText(ctx.chat.id, statusMessageId, waiting, { parse_mode: 'HTML' })
-      .catch(() => {});
-  } else {
-    const status = await ctx.reply(waiting, { parse_mode: 'HTML' });
-    statusMessageId = status.message_id;
-  }
+  if (statusId) await ctx.api.deleteMessage(ctx.chat.id, statusId).catch(() => {});
+  const { media, cached } = await placeholderMedia('standard', standard);
+  const status = await ctx.replyWithPhoto(media, { caption, parse_mode: 'HTML' });
+  if (!cached) await rememberPlaceholder('standard', status);
+  const statusMessageId = status.message_id;
   const meta = { c: ctx.chat.id, m: statusMessageId, k: job.kind, l: label };
-  const status = { message_id: statusMessageId };
 
   let taskId;
   try {
@@ -417,10 +416,10 @@ async function execute(ctx, job, statusId) {
       try {
         taskId = await createTask(model, retry, callbackUrl(meta));
       } catch (err2) {
-        return reportFail(ctx, status.message_id, label, err2.message);
+        return reportFail(ctx, statusMessageId, label, err2.message);
       }
     } else {
-      return reportFail(ctx, status.message_id, label, err.message);
+      return reportFail(ctx, statusMessageId, label, err.message);
     }
   }
   await rememberJob(taskId, { prompt: String(input.prompt) });
@@ -511,15 +510,17 @@ async function confirmText({ model, input, label }) {
   return lines.join('\n');
 }
 
+// Сообщение о ходе работы — картинка, поэтому правим подпись, а не текст.
 function reportFail(ctx, messageId, label, message) {
+  const text = `❌ <b>${label}</b>\n<code>${escapeHtml(message)}</code>`;
   return ctx.api
-    .editMessageText(
-      ctx.chat.id,
-      messageId,
-      `❌ <b>${label}</b>\n<code>${escapeHtml(message)}</code>`,
-      { parse_mode: 'HTML' }
-    )
-    .catch(() => ctx.reply(`❌ ${label}: ${message}`));
+    .editMessageCaption(ctx.chat.id, messageId, { caption: text, parse_mode: 'HTML' })
+    .catch(() =>
+      ctx.api
+        .deleteMessage(ctx.chat.id, messageId)
+        .catch(() => {})
+        .then(() => ctx.reply(text, { parse_mode: 'HTML' }))
+    );
 }
 
 // ── интерфейс настроек ────────────────────────────────────────────────────────

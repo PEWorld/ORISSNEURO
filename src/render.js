@@ -5,6 +5,10 @@ import { escapeHtml } from './html.js';
 const CAPTION_LIMIT = 1024;
 const TEXT_LIMIT = 4096;
 
+// Единый вид подписи под результатом: заголовок, «Ваш промпт:», сам промпт.
+export const PROMPT_LABEL = '<b>Ваш промпт:</b>';
+export const WAITING_HEADER = `⏳ <b>Ваша генерация в процессе</b>\n\n${PROMPT_LABEL}`;
+
 // Моноширинный блок — у него в Telegram есть кнопка «копировать».
 export function pre(text) {
   return `<pre>${escapeHtml(text)}</pre>`;
@@ -16,18 +20,24 @@ export function clip(text, limit) {
 }
 
 /**
- * Промпт должен быть под картинками и копироваться целиком. В подпись он влезает
- * не всегда (1024 символа), поэтому длинный уезжает отдельным сообщением.
+ * Промпт должен быть под картинкой и копироваться целиком. В подпись он влезает
+ * не всегда (1024 символа), поэтому длинный ужимается в подписи, а целиком
+ * уезжает отдельным сообщением.
  * @returns {{caption:string, overflow:string|null}}
  */
 export function captionPlan(prompt, header = '') {
-  const body = pre(prompt);
-  const full = header ? `${header}\n${body}` : body;
+  const build = (p) => (header ? `${header}\n` : '') + pre(p);
+  const full = build(prompt);
   if (full.length <= CAPTION_LIMIT) return { caption: full, overflow: null };
-  return {
-    caption: header || undefined,
-    overflow: clip(body, TEXT_LIMIT),
-  };
+
+  // Экранирование меняет длину непредсказуемо (& → &amp;), поэтому подбираем.
+  let len = prompt.length;
+  let caption = full;
+  while (len > 40 && caption.length > CAPTION_LIMIT) {
+    len = Math.floor(len * 0.8);
+    caption = build(clip(prompt, len));
+  }
+  return { caption, overflow: clip(pre(prompt), TEXT_LIMIT) };
 }
 
 async function download(url) {
@@ -88,6 +98,24 @@ export async function sendAlbumSmart(api, chatId, items, extra = {}) {
       ...(it.caption ? { caption: it.caption, parse_mode: 'HTML' } : {}),
     }));
     return api.sendMediaGroup(chatId, byFile, extra);
+  }
+}
+
+/**
+ * Подменяет медиа прямо в существующем сообщении — так результат остаётся на
+ * месте «в процессе», а не уезжает вниз чата. Работает только если сообщение
+ * уже было медиа: текст в картинку Telegram превратить не даст.
+ */
+export async function editMediaSmart(api, chatId, messageId, kind, url, opts = {}) {
+  const { caption, reply_markup } = opts;
+  const base = { type: kind, ...(caption ? { caption, parse_mode: 'HTML' } : {}) };
+  const extra = reply_markup ? { reply_markup } : {};
+  try {
+    return await api.editMessageMedia(chatId, messageId, { ...base, media: url }, extra);
+  } catch {
+    const buf = await download(url);
+    const file = new InputFile(buf, nameFor(url, kind === 'video' ? 'out.mp4' : 'out.png'));
+    return api.editMessageMedia(chatId, messageId, { ...base, media: file }, extra);
   }
 }
 

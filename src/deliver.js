@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { getTask, resultUrls } from './kie.js';
 import * as store from './storage.js';
 import { escapeHtml } from './html.js';
-import { captionPlan, sendMediaSmart } from './render.js';
+import { captionPlan, sendMediaSmart, editMediaSmart, PROMPT_LABEL } from './render.js';
 import { onFrameTaskDone } from './frames.js';
 
 export { escapeHtml };
@@ -96,12 +96,14 @@ export async function deliver(api, meta, taskId, data) {
   const job = await recallJob(taskId);
   const prompt = job?.prompt;
 
+  // Сообщение о ходе работы — картинка-заглушка, поэтому правим подпись.
   const editOrSend = async (text) => {
     if (meta.m) {
       try {
-        await api.editMessageText(chatId, meta.m, text, { parse_mode: 'HTML' });
+        await api.editMessageCaption(chatId, meta.m, { caption: text, parse_mode: 'HTML' });
         return;
-      } catch { /* сообщение могло уехать — просто отправим новое */ }
+      } catch { /* сообщение могло уехать или быть текстом — отправим новое */ }
+      await api.deleteMessage(chatId, meta.m).catch(() => {});
     }
     await api.sendMessage(chatId, text, { parse_mode: 'HTML' });
   };
@@ -123,13 +125,25 @@ export async function deliver(api, meta, taskId, data) {
     return;
   }
 
-  // Результат уходит вниз чата вместе со своим промптом — так при нескольких
-  // параллельных генерациях видно, что к чему относится.
+  // Результат подписан своим промптом — так при нескольких параллельных
+  // генерациях видно, что к чему относится.
   const stats = human(info);
   const header = `${label}${stats ? ` · ${stats}` : ''}`;
   const { caption, overflow } = prompt
-    ? captionPlan(prompt, header)
+    ? captionPlan(prompt, `${header}\n\n${PROMPT_LABEL}`)
     : { caption: header, overflow: null };
+
+  // Один файл подменяем прямо в сообщении о ходе работы — оно остаётся на месте.
+  if (urls.length === 1 && meta.m) {
+    try {
+      await editMediaSmart(api, chatId, meta.m, meta.k, urls[0], { caption });
+      if (overflow) await api.sendMessage(chatId, overflow, { parse_mode: 'HTML' }).catch(() => {});
+      await store.removePending(taskId);
+      return;
+    } catch {
+      // Не вышло подменить — отправим обычным сообщением ниже.
+    }
+  }
 
   if (meta.m) await api.deleteMessage(chatId, meta.m).catch(() => {});
 

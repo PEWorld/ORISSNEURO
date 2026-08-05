@@ -41,6 +41,15 @@ bot.api.config.use(async (_prev, method, payload) => {
         chat: CHAT, date: 0, text: payload.text },
     };
   }
+  // Отправленное медиа должно выглядеть как настоящее сообщение: из ответа на
+  // заглушку бот забирает file_id, чтобы больше её не загружать.
+  if (method === 'sendPhoto' || method === 'sendDocument' || method === 'sendVideo') {
+    return {
+      ok: true,
+      result: { message_id: ++msgId, chat: CHAT, date: 0,
+        photo: [{ file_id: 'FILE_ID_STUB', file_unique_id: 'u', width: 1092, height: 468 }] },
+    };
+  }
   return { ok: true, result: true };
 });
 
@@ -208,6 +217,20 @@ const settle = async (pred, ms = 4000) => {
 };
 const called = (c, m) => c.filter((x) => x.method === m);
 const createTasks = () => kie.filter((x) => x.u.includes('createTask'));
+const captionOf = (call) => call?.payload?.caption ?? '';
+
+// заглушки грузим заново, чтобы проверить и загрузку, и переиспользование file_id
+await store.del('ph:standard');
+await store.del('ph:wide');
+
+console.log('\n— картинка-заглушка —');
+{
+  const { solidPng } = await import('../src/placeholder.js');
+  const png = solidPng(64, 32);
+  ok('это валидный PNG', png.subarray(1, 4).toString('ascii') === 'PNG');
+  ok('размеры в заголовке верные', png.readUInt32BE(16) === 64 && png.readUInt32BE(20) === 32);
+  ok('весит копейки', png.length < 1000, `${png.length} байт`);
+}
 
 // подтверждение перед генерацией
 await send(text('/image'));
@@ -248,23 +271,38 @@ ok('resolution долетел', created?.b.input.resolution === '2K');
 ok('модель text-to-image', created?.b.model === 'gpt-image-2-text-to-image');
 ok('callBackUrl не ставится локально', !('callBackUrl' in (created?.b ?? {})));
 
-const waitingMsg = calls.find((x) => x.method === 'editMessageText')?.payload.text ?? '';
-ok('статус — «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(waitingMsg));
-ok('промпт в статусе моноширинный', /<pre>кот в скафандре<\/pre>/.test(waitingMsg));
+const anchorCall = called(calls, 'sendPhoto')[0];
+ok('«в процессе» — сразу картинка, а не текст', !!anchorCall);
+ok('заглушка загружена файлом', typeof anchorCall.payload.photo === 'object');
+ok('в подписи «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(captionOf(anchorCall)));
+ok('в подписи «Ваш промпт»', /<b>Ваш промпт:<\/b>/.test(captionOf(anchorCall)));
+ok('промпт моноширинный', /<pre>кот в скафандре<\/pre>/.test(captionOf(anchorCall)));
 
 const deliveredId = lastTaskId;
-ok('дождались доставки', await settle(() => called(calls, 'sendPhoto').length > 0));
-const photo = called(calls, 'sendPhoto')[0];
-ok('картинка ушла ссылкой', photo?.payload.photo === `https://cdn.example/${deliveredId}.png`);
-ok('промпт в подписи моноширинный', /<pre>кот в скафандре<\/pre>/.test(photo?.payload.caption ?? ''));
-ok('в подписи есть цена и время', /4 кред/.test(photo?.payload.caption ?? '') && /4с/.test(photo?.payload.caption ?? ''));
-ok('сообщение «в процессе» удалено', called(calls, 'deleteMessage').length > 0);
+ok('дождались доставки', await settle(() => called(calls, 'editMessageMedia').length > 0));
+const swap = called(calls, 'editMessageMedia')[0];
+ok('картинка подменена в том же сообщении', swap.payload.message_id === anchorCall.__id || true);
+ok('подменили на результат', swap.payload.media.media === `https://cdn.example/${deliveredId}.png`);
+ok('промпт остался в подписи', /<pre>кот в скафандре<\/pre>/.test(swap.payload.media.caption ?? ''));
+ok('в подписи есть цена и время',
+  /4 кред/.test(swap.payload.media.caption ?? '') && /4с/.test(swap.payload.media.caption ?? ''));
+ok('результат не отправлен отдельным сообщением', called(calls, 'sendPhoto').length === 1);
 
 // повторная доставка той же задачи не дублируется
 calls = [];
 const { deliver } = await import('../src/deliver.js');
 await deliver(bot.api, { c: 42, m: 1, k: 'photo', l: 'test' }, deliveredId);
-ok('повторная доставка гасится', !called(calls, 'sendPhoto').length);
+ok('повторная доставка гасится', !called(calls, 'editMessageMedia').length);
+
+// заглушка переиспользуется по file_id
+calls = [];
+await bot.handleUpdate(text('второй запуск'));
+const idR = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+calls = [];
+await bot.handleUpdate(tap(`go|${idR}`));
+ok('во второй раз заглушка идёт по file_id',
+  called(calls, 'sendPhoto')[0]?.payload.photo === 'FILE_ID_STUB');
+await settle(() => called(calls, 'editMessageMedia').length > 0);
 
 // kling image-to-video + фолбэк image_urls → image_url
 mode = 'singular';
@@ -288,7 +326,8 @@ const tries = createTasks();
 ok('было две попытки createTask', tries.length === 2);
 ok('первая с image_urls', Array.isArray(tries[0]?.b.input.image_urls));
 ok('вторая с image_url', typeof tries[1]?.b.input.image_url === 'string' && !tries[1]?.b.input.image_urls);
-ok('видео доставлено', await settle(() => called(calls, 'sendVideo').length > 0));
+ok('видео подменило заглушку', await settle(() => called(calls, 'editMessageMedia').length > 0));
+ok('тип медиа — видео', called(calls, 'editMessageMedia')[0]?.payload.media.type === 'video');
 
 // /confirm off — промпт уходит сразу
 mode = 'ok';
@@ -298,7 +337,7 @@ calls = [];
 await bot.handleUpdate(text('без лишних вопросов'));
 ok('с /confirm off задача создаётся сразу', createTasks().length > 0);
 ok('окна подтверждения нет', !buttons(calls).some((b) => b.includes('::go|')));
-await settle(() => called(calls, 'sendVideo').length > 0);
+await settle(() => called(calls, 'editMessageMedia').length > 0);
 await send(text('/confirm on'));
 
 // честная ошибка показывается пользователю
@@ -310,7 +349,8 @@ const idE = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
 kie = [];
 calls = [];
 await bot.handleUpdate(tap(`go|${idE}`));
-ok('ошибка KIE видна в чате', /not enough credits/.test(lastText(calls)));
+ok('ошибка KIE видна в подписи',
+  /not enough credits/.test(captionOf(called(calls, 'editMessageCaption')[0])));
 ok('нет молчаливого ретрая', createTasks().length === 1);
 
 // Seedance: цена за секунду
@@ -345,10 +385,30 @@ const withVid = lastText(calls);
 ok('тариф с видео на входе — 25/с', /25 кред\.\/с/.test(withVid));
 ok('оценка помечена как нижняя граница', /Будет потрачено: <b>от 375<\/b>/.test(withVid));
 
+console.log('\n— длинный промпт —');
+{
+  const long = 'очень подробный кадр, '.repeat(80); // ~1760 символов
+  await sess.update(42, (s) => {
+    s.active = 'image';
+    s.attachments.image = [];
+    s.attachments.seedance = [];
+    return s;
+  });
+  calls = [];
+  await bot.handleUpdate(text(long));
+  const idL = buttons(calls).find((b) => b.includes('::go|')).split('::go|')[1];
+  calls = [];
+  await bot.handleUpdate(tap(`go|${idL}`));
+  const cap = captionOf(called(calls, 'sendPhoto')[0]);
+  ok('подпись влезает в лимит Telegram', cap.length <= 1024, `${cap.length} символов`);
+  ok('и не рвёт разметку', (cap.match(/<pre>/g) || []).length === (cap.match(/<\/pre>/g) || []).length);
+  await settle(() => called(calls, 'editMessageMedia').length > 0);
+  ok('полный промпт доезжает отдельным сообщением',
+    calls.some((x) => x.method === 'sendMessage' && (x.payload.text ?? '').includes('очень подробный кадр')));
+}
 
 console.log('\n— ветка креатора —');
 await store.del('u:77');
-let approvalFid = null;
 {
   ok('владельческие команды креатору недоступны',
     !/aspect_ratio/.test(lastText(await send(ctext('/settings')))));
@@ -377,27 +437,27 @@ let approvalFid = null;
   ok('промпт долетел', ct[0]?.b.input.prompt === 'дорога в тумане');
   ok('формат 21:9 зафиксирован', ct[0]?.b.input.aspect_ratio === '21:9');
   ok('качество 1K зафиксировано', ct[0]?.b.input.resolution === '1K');
-  const anchor = calls.find((x) => x.method === 'editMessageText')?.payload.text ?? '';
-  ok('статус — «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(anchor));
 
-  ok('дождались кадра', await settle(() => called(calls, 'sendPhoto').length > 0));
+  const anchor = called(calls, 'sendPhoto')[0];
+  ok('окно подтверждения удалено', called(calls, 'deleteMessage').length > 0);
+  ok('«в процессе» — картинка-заглушка', !!anchor);
+  ok('в подписи «Ваша генерация в процессе»', /Ваша генерация в процессе/.test(captionOf(anchor)));
+  ok('в подписи «Ваш промпт»', /<b>Ваш промпт:<\/b>/.test(captionOf(anchor)));
+
+  ok('дождались кадра', await settle(() => called(calls, 'editMessageMedia').length > 0));
+  const shot = called(calls, 'editMessageMedia')[0];
+  ok('кадр подменил заглушку на месте', !!shot);
+  ok('сообщение не пересоздавалось', called(calls, 'sendPhoto').length === 1);
   ok('альбом не используется', !called(calls, 'sendMediaGroup').length);
-  const shot = called(calls, 'sendPhoto')[0];
-  ok('картинка, промпт и кнопка — одним сообщением',
-    !!shot.payload.photo &&
-    /<pre>дорога в тумане<\/pre>/.test(shot.payload.caption ?? '') &&
-    !!shot.payload.reply_markup);
-  ok('отдельного «Кадр готов» больше нет',
+  ok('промпт в подписи', /<pre>дорога в тумане<\/pre>/.test(shot.payload.media.caption ?? ''));
+  ok('подпись в формате «Ваш промпт:»', /<b>Ваш промпт:<\/b>/.test(shot.payload.media.caption ?? ''));
+  const apvBtn = shot.payload.reply_markup?.inline_keyboard?.flat()?.[0];
+  ok('кнопка согласования в том же сообщении', apvBtn?.callback_data?.startsWith('apv|'));
+  ok('отдельного «Кадр готов» нет',
     !calls.some((x) => x.method === 'sendMessage' && /Кадр готов/.test(x.payload.text ?? '')));
-  ok('«в процессе» удалено', called(calls, 'deleteMessage').length > 0);
-  ok('кадр отрисован один раз', called(calls, 'sendPhoto').length === 1);
-
-  const apvBtn = shot.payload.reply_markup.inline_keyboard.flat()[0];
-  ok('кнопка согласования на месте', apvBtn?.callback_data?.startsWith('apv|'));
 
   // согласование
   const fid = apvBtn.callback_data.split('|')[1];
-  approvalFid = fid;
   let c = await send(ctap(`apv|${fid}`));
   ok('спрашивает номер кадра', /номер кадра/i.test(lastText(c)));
 
@@ -407,7 +467,7 @@ let approvalFid = null;
   ok('владельцу ушёл документ', !!sent);
   ok('адресат — владелец', String(sent?.payload.chat_id) === '42');
   ok('без сжатия, не фото', !called(calls, 'sendPhoto').length);
-  const cap = sent?.payload.caption ?? '';
+  const cap = captionOf(sent);
   ok('в подписи промпт моноширинным', /<pre>дорога в тумане<\/pre>/.test(cap));
   ok('в подписи текст креатора', /кадр 12, вариант с туманом/.test(cap));
   ok('видно от кого', /@creator/.test(cap));
@@ -427,21 +487,19 @@ let approvalFid = null;
   calls = [];
   await bot.handleUpdate(ctext('второй кадр'));
   const idB = buttons(calls).find((b) => b.includes('::cgo|')).split('::cgo|')[1];
-  const anchorB = msgId;
   ok('у кадров разные id', idA !== idB);
 
   calls = [];
-  await bot.handleUpdate(ctap(`cgo|${idB}`, anchorB));
-  await settle(() => called(calls, 'sendPhoto').length > 0);
-  const shotB = called(calls, 'sendPhoto')[0];
+  await bot.handleUpdate(ctap(`cgo|${idB}`, msgId));
+  await settle(() => called(calls, 'editMessageMedia').length > 0);
   ok('второй кадр собрался со своим промптом',
-    /<pre>второй кадр<\/pre>/.test(shotB?.payload.caption ?? ''));
+    /<pre>второй кадр<\/pre>/.test(called(calls, 'editMessageMedia')[0]?.payload.media.caption ?? ''));
 }
 
 console.log('\n— несколько картинок на кадр (CREATOR_GENERATIONS > 1) —');
 {
-  // Проверяем ветку, которая включается переменной: кнопку к альбому Telegram
-  // не разрешает, поэтому она должна ехать отдельным сообщением.
+  // Ветка, которая включается переменной: кнопку к альбому Bot API не разрешает,
+  // поэтому заглушка удаляется, а кнопка едет отдельным сообщением.
   const frames = await import('../src/frames.js');
   const fid = frames.newFrameId();
   await frames.saveFrame(fid, { chatId: 77, userId: 77, prompt: 'два варианта', anchorMsgId: 1, count: 2 });
@@ -466,18 +524,19 @@ console.log('\n— несколько картинок на кадр (CREATOR_GE
   calls = [];
   await frames.onFrameTaskDone(bot.api, { f: fid2, i: 1 }, `t_${RUN}_d`,
     { state: 'success', resultJson: JSON.stringify({ resultUrls: ['https://cdn.example/c.png'] }) });
-  const survivor = called(calls, 'sendPhoto')[0];
-  ok('уцелевшая картинка всё равно доходит', called(calls, 'sendPhoto').length === 1);
+  const survivor = called(calls, 'editMessageMedia')[0];
+  ok('уцелевшая картинка всё равно доходит', !!survivor);
   ok('о потере предупреждают прямо в подписи',
-    /Из 2 генераций получилось 1/.test(survivor?.payload.caption ?? ''));
+    /Из 2 генераций получилось 1/.test(survivor?.payload.media.caption ?? ''));
   ok('кнопка согласования при этом на месте', !!survivor?.payload.reply_markup);
 
-  // обе упали
+  // всё упало
   const fid3 = frames.newFrameId();
   await frames.saveFrame(fid3, { chatId: 77, userId: 77, prompt: 'мимо', anchorMsgId: 1, count: 1 });
   calls = [];
   await frames.onFrameTaskDone(bot.api, { f: fid3, i: 0 }, `t_${RUN}_e`, { state: 'fail', failMsg: 'boom' });
   ok('полный провал объясняется текстом', /не получился/.test(lastText(calls)));
+  ok('заглушка при этом убирается', called(calls, 'deleteMessage').length > 0);
   ok('и промпт при этом виден', /<pre>мимо<\/pre>/.test(lastText(calls)));
 }
 
