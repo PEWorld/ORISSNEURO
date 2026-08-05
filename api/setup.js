@@ -50,6 +50,10 @@ export default async function handler(req, res) {
     storage: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN
       ? 'upstash/kv — настройки переживают перезапуск'
       : 'memory — настройки живут только до следующего холодного старта, подключи Upstash',
+    // Только имена переменных, без значений — чтобы понять, доехало ли хранилище.
+    storageEnvSeen: Object.keys(process.env)
+      .filter((k) => /UPSTASH|^KV_|REDIS/.test(k))
+      .sort(),
   };
 
   if (!publicBase()) {
