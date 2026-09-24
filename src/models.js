@@ -14,7 +14,8 @@ export const MODELS = {
   image: {
     label: 'GPT Image 2',
     emoji: '🖼',
-    resultKind: 'photo',
+    // Картинки отдаём файлом (документом), чтобы Telegram их не пережимал.
+    resultKind: 'document',
     // Максимум вложений и что именно принимаем
     accepts: { image: 16, video: 0, audio: 0 },
     attachHint: 'Пришли до 16 картинок — включится image-to-image (input_urls).',
@@ -118,7 +119,39 @@ export const MODELS = {
       return { model: 'bytedance/seedance-2', input };
     },
   },
+
+  // Новые модели — только в конец: индекс модели зашит в callback_data кнопок.
+  nb2: nanoBanana({ model: 'nano-banana-2', label: 'Nano Banana 2', emoji: '🍌', maxRefs: 14 }),
+  nbpro: nanoBanana({ model: 'nano-banana-pro', label: 'Nano Banana Pro', emoji: '🍌', maxRefs: 8 }),
 };
+
+// Обе Nano Banana принимают одну и ту же схему; t2i и i2i — один model id,
+// режим включается самим полем image_input.
+function nanoBanana({ model, label, emoji, maxRefs }) {
+  return {
+    label,
+    emoji,
+    resultKind: 'document',
+    accepts: { image: maxRefs, video: 0, audio: 0 },
+    attachHint: `Пришли до ${maxRefs} картинок — они уйдут референсами (image_input).`,
+    params: [
+      {
+        key: 'aspect_ratio', type: 'enum',
+        values: ['auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
+        def: 'auto',
+      },
+      { key: 'resolution', type: 'enum', values: ['1K', '2K', '4K'], def: '1K' },
+      { key: 'output_format', type: 'enum', values: ['png', 'jpg'], def: 'png' },
+    ],
+    build(state) {
+      const urls = state.attachments.filter((a) => a.kind === 'image').map((a) => a.url);
+      const input = { prompt: state.prompt };
+      if (urls.length) input.image_input = urls.slice(0, maxRefs);
+      applyParams(this.params, state.params, input);
+      return { model, input };
+    },
+  };
+}
 
 // Кладём в input всё, что реально задано (или имеет дефолт), кроме local-полей бота.
 function applyParams(schema, values, input) {

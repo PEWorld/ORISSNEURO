@@ -78,7 +78,7 @@ async function claim(taskId) {
 /**
  * Отправляет результат завершённой задачи в чат.
  * @param api   grammy bot.api
- * @param meta  { c: chatId, m: messageId|null, k: 'photo'|'video', l: label, f?: frameId, i?: index }
+ * @param meta  { c: chatId, m: messageId|null, k: 'photo'|'document'|'video', l: label, f?: frameId, i?: index }
  */
 export async function deliver(api, meta, taskId, data) {
   if (!(await claim(taskId))) return;

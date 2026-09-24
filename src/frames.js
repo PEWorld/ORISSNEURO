@@ -8,7 +8,7 @@ import { InlineKeyboard } from 'grammy';
 import * as store from './storage.js';
 import { resultUrls } from './kie.js';
 import {
-  pre, captionPlan, clip, sendMediaSetSmart, editMediaSmart, PROMPT_LABEL,
+  pre, captionPlan, clip, sendMediaSetSmart, sendMediaSmart, editMediaSmart, PROMPT_LABEL,
 } from './render.js';
 import { escapeHtml } from './html.js';
 import { approvalChatId } from './roles.js';
@@ -79,17 +79,28 @@ async function renderFrame(api, fid) {
 
   if (urls.length === 1) {
     // Подменяем заглушку на готовый кадр — сообщение остаётся на своём месте.
-    await editMediaSmart(api, frame.chatId, frame.anchorMsgId, 'photo', urls[0], {
-      caption,
-      reply_markup: keyboard,
-    });
+    // Кадр отдаём файлом, чтобы Telegram не пережимал. Если заглушку-фото
+    // не дали превратить в документ — шлём новым сообщением.
+    try {
+      await editMediaSmart(api, frame.chatId, frame.anchorMsgId, 'document', urls[0], {
+        caption,
+        reply_markup: keyboard,
+      });
+    } catch {
+      await api.deleteMessage(frame.chatId, frame.anchorMsgId).catch(() => {});
+      await sendMediaSmart(api, frame.chatId, 'document', urls[0], {
+        caption,
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    }
   } else {
     // Кнопку к альбому Bot API не разрешает, поэтому она едет отдельно.
     await api.deleteMessage(frame.chatId, frame.anchorMsgId).catch(() => {});
     await sendMediaSetSmart(
       api,
       frame.chatId,
-      urls.map((url, i) => ({ type: 'photo', url, ...(i === 0 && caption ? { caption } : {}) }))
+      urls.map((url, i) => ({ type: 'document', url, ...(i === 0 && caption ? { caption } : {}) }))
     );
     await api.sendMessage(frame.chatId, '✅ Кадр готов', { reply_markup: keyboard });
   }

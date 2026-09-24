@@ -175,7 +175,7 @@ async function startFrame(ctx, pending) {
 
   const started = [];
   for (let i = 0; i < GENERATIONS; i++) {
-    const meta = { c: ctx.chat.id, m: anchorId, k: 'photo', l: 'Кадр', f: fid, i };
+    const meta = { c: ctx.chat.id, m: anchorId, k: 'document', l: 'Кадр', f: fid, i };
     try {
       const taskId = await createTask(model, input, callbackUrl(meta));
       await rememberJob(taskId, { prompt });

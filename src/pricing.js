@@ -7,6 +7,11 @@ export const PRICES = {
   'gpt-image-2-text-to-image': { unit: 'image', byResolution: { '1K': 6, '2K': 10, '4K': 16 } },
   'gpt-image-2-image-to-image': { unit: 'image', byResolution: { '1K': 6, '2K': 10, '4K': 16 } },
 
+  // Nano Banana 2: 1K замерено живым запуском в CLI, 2K/4K — оценка.
+  'nano-banana-2': { unit: 'image', byResolution: { '1K': 8, '2K': 12, '4K': 18 } },
+  // Nano Banana Pro: оценка, после генерации бот покажет фактическое списание.
+  'nano-banana-pro': { unit: 'image', byResolution: { '1K': 18, '2K': 18, '4K': 24 } },
+
   // за ролик целиком
   'kling/v2-5-turbo-text-to-video-pro': { unit: 'video', byDuration: { 5: 42, 10: 84 } },
   'kling/v2-5-turbo-image-to-video-pro': { unit: 'video', byDuration: { 5: 42, 10: 84 } },

@@ -97,7 +97,7 @@ ok('/help отвечает', lastText(await send(text('/help'))).includes('KIE A
 {
   const c = await send(text('/kling'));
   ok('/kling показывает свои параметры', lastText(c).includes('cfg_scale'));
-  ok('в клавиатуре есть все три модели', buttons(c).filter((b) => b.includes('::m|')).length === 3);
+  ok('в клавиатуре есть все пять моделей', buttons(c).filter((b) => b.includes('::m|')).length === 5);
   ok('активная модель помечена', buttons(c).some((b) => b.startsWith('● ') && b.includes('Kling')));
 }
 
@@ -333,6 +333,8 @@ calls = [];
 await bot.handleUpdate(tap(`go|${idP2}`));
 ok('позднее окно тоже работает', createTasks()[0]?.b.input.prompt === 'кадр два');
 await settle(() => called(calls, 'editMessageMedia').length > 0);
+ok('картинка приходит файлом, а не сжатым фото',
+  called(calls, 'editMessageMedia')[0]?.payload.media?.type === 'document');
 
 // повторная доставка той же задачи не дублируется
 calls = [];
