@@ -10,6 +10,7 @@ const COMMANDS = [
   { command: 'image', description: '🖼 GPT Image 2' },
   { command: 'nb2', description: '🍌 Nano Banana 2' },
   { command: 'nbpro', description: '🍌 Nano Banana Pro' },
+  { command: 'seedream', description: '🌱 Seedream 5.0 Pro' },
   { command: 'kling', description: '🎬 Kling 2.5 Turbo Pro' },
   { command: 'seedance', description: '🌀 Seedance 2.0' },
   { command: 'settings', description: 'Параметры активной модели' },

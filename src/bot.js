@@ -11,7 +11,7 @@ import { ingestFile } from './ingest.js';
 import { captionPlan, sendWaiting, PROMPT_LABEL } from './render.js';
 import { placeholderMedia, rememberPlaceholder, standard } from './placeholder.js';
 
-const MK = Object.keys(MODELS); // ['image','kling','seedance','nb2','nbpro'] — индексы в callback_data
+const MK = Object.keys(MODELS); // ['image','kling','seedance','nb2','nbpro','seedream'] — индексы в callback_data
 
 export function createBot(token) {
   const bot = new Bot(token);
@@ -609,6 +609,7 @@ const HELP = `<b>KIE AI прямо в телеге</b>
 /image — 🖼 GPT Image 2
 /nb2 — 🍌 Nano Banana 2
 /nbpro — 🍌 Nano Banana Pro
+/seedream — 🌱 Seedream 5.0 Pro
 /kling — 🎬 Kling 2.5 Turbo Pro
 /seedance — 🌀 Seedance 2.0
 

@@ -97,7 +97,7 @@ ok('/help отвечает', lastText(await send(text('/help'))).includes('KIE A
 {
   const c = await send(text('/kling'));
   ok('/kling показывает свои параметры', lastText(c).includes('cfg_scale'));
-  ok('в клавиатуре есть все пять моделей', buttons(c).filter((b) => b.includes('::m|')).length === 5);
+  ok('в клавиатуре есть все шесть моделей', buttons(c).filter((b) => b.includes('::m|')).length === 6);
   ok('активная модель помечена', buttons(c).some((b) => b.startsWith('● ') && b.includes('Kling')));
 }
 

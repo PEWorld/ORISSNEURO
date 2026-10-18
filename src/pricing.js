@@ -12,6 +12,10 @@ export const PRICES = {
   // Nano Banana Pro: оценка, после генерации бот покажет фактическое списание.
   'nano-banana-pro': { unit: 'image', byResolution: { '1K': 18, '2K': 18, '4K': 24 } },
 
+  // Seedream 5.0 Pro: basic (1K) — 7.5, high (2K) — 14.5–15 по журналу задач CLI (KIE, 10.10.2026).
+  'seedream/5-pro-text-to-image': { unit: 'image', byQuality: { basic: 7.5, high: 15 } },
+  'seedream/5-pro-image-to-image': { unit: 'image', byQuality: { basic: 7.5, high: 15 } },
+
   // за ролик целиком
   'kling/v2-5-turbo-text-to-video-pro': { unit: 'video', byDuration: { 5: 42, 10: 84 } },
   'kling/v2-5-turbo-image-to-video-pro': { unit: 'video', byDuration: { 5: 42, 10: 84 } },
@@ -47,6 +51,15 @@ export function estimate(model, input) {
       exact: false,
       note: 'resolution не задан — разрешение выберет модель',
     };
+  }
+
+  if (p.byQuality) {
+    const q = input.quality ?? 'basic';
+    const v = p.byQuality[q];
+    if (v == null) return null;
+    return q === 'basic'
+      ? { min: v, max: v, exact: true }
+      : { min: v, max: v, exact: false, note: 'high — по прошлым списаниям 14.5–15' };
   }
 
   if (p.byDuration) {

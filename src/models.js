@@ -123,6 +123,37 @@ export const MODELS = {
   // Новые модели — только в конец: индекс модели зашит в callback_data кнопок.
   nb2: nanoBanana({ model: 'nano-banana-2', label: 'Nano Banana 2', emoji: '🍌', maxRefs: 14 }),
   nbpro: nanoBanana({ model: 'nano-banana-pro', label: 'Nano Banana Pro', emoji: '🍌', maxRefs: 8 }),
+
+  // Seedream 5.0 Pro: t2i и i2i — разные model id, режим выбирается по наличию картинок.
+  // Схема — docs.kie.ai/market/seedream/5-pro-*. nsfw_checker по умолчанию выключен.
+  seedream: {
+    label: 'Seedream 5.0 Pro',
+    emoji: '🌱',
+    resultKind: 'document',
+    accepts: { image: 10, video: 0, audio: 0 },
+    attachHint: 'Пришли до 10 картинок — включится image-to-image (image_urls).',
+    params: [
+      {
+        key: 'aspect_ratio', type: 'enum',
+        values: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'], def: '3:4',
+        note: 'В API обязательный, дефолт модели — 1:1.',
+      },
+      { key: 'quality', type: 'enum', values: ['basic', 'high'], def: 'basic', note: 'basic — 1K, high — 2K.' },
+      { key: 'output_format', type: 'enum', values: ['png', 'jpeg'], def: 'png' },
+      {
+        key: 'nsfw_checker', type: 'bool', def: false,
+        note: 'Фильтр KIE. Выключен — результат приходит без дополнительной фильтрации.',
+      },
+    ],
+    build(state) {
+      const urls = state.attachments.filter((a) => a.kind === 'image').map((a) => a.url);
+      const model = urls.length ? 'seedream/5-pro-image-to-image' : 'seedream/5-pro-text-to-image';
+      const input = { prompt: state.prompt };
+      if (urls.length) input.image_urls = urls.slice(0, 10);
+      applyParams(this.params, state.params, input);
+      return { model, input };
+    },
+  },
 };
 
 // Обе Nano Banana принимают одну и ту же схему; t2i и i2i — один model id,
