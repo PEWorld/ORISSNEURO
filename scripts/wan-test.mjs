@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import { MODELS, defaultParams, coerce, findParam } from '../src/models.js';
+import { estimate } from '../src/pricing.js';
+import { validateWan } from '../src/wan.js';
+const build = (params = {}, attachments = [], prompt = 'Scene') => MODELS.wan.build({ prompt, params: { ...defaultParams('wan'), ...params }, attachments }).input;
+const media = (kind, duration) => ({ kind, url: `https://example.com/${kind}`, duration });
+assert.deepEqual(Object.keys(MODELS), ['image', 'kling', 'seedance', 'nb2', 'nbpro', 'seedream', 'wan']);
+for (const [resolution, rate] of Object.entries({ '480P': 8, '720P': 16, '1080P': 32 })) {
+  for (const duration of [2, 5, 10, 30]) assert.equal(estimate('wan/3-0-video', build({ resolution, duration })).min, rate * duration);
+  const smart = estimate('wan/3-0-video', build({ resolution, duration: -1 }));
+  assert.equal(smart.min, 2 * rate); assert.equal(smart.max, 30 * rate); assert.equal(smart.exact, false);
+}
+const refs = build({}, [media('image'), media('video', 5), media('audio', 3)]);
+assert.equal(refs.reference_video_urls.length, 1);
+const price = estimate('wan/3-0-video', refs);
+assert.equal(price.min, 40); assert.equal(price.max, 160); assert.equal(price.exact, false);
+const frames = build({ mode: 'frames' }, [media('image'), media('image')]);
+assert.ok(frames.first_frame_url && frames.last_frame_url); assert.ok(!frames.reference_image_urls && !frames.mode);
+assert.deepEqual(build({}, [media('file')]).reference_file_urls, ['https://example.com/file']);
+assert.deepEqual(build({ reference_link_urls: 'https://example.com' }).reference_link_urls, ['https://example.com']);
+for (const duration of [0, 1, -2, 31, 2.5]) assert.throws(() => build({ duration }));
+for (const s of ['2.5', '5s', '1', '0', '-2']) assert.throws(() => coerce(findParam('wan', 'duration'), s));
+assert.equal(coerce(findParam('wan', 'duration'), '-1'), -1);
+assert.throws(() => build({ duration: 20 }, [media('video', 15)]));
+assert.throws(() => build({}, [media('video', 10), media('video', 10)]));
+assert.throws(() => build({}, [media('audio', 16)]));
+assert.throws(() => build({ mode: 'frames' }, [media('image'), media('video', 5)]));
+assert.throws(() => build({ reference_link_urls: 'https://example.com' }, [media('file')]));
+assert.throws(() => build({ reference_link_urls: 'file:///secret' }));
+assert.throws(() => build({}, [], 'x'.repeat(20001)));
+assert.throws(() => validateWan({ ...build(), last_frame_url: 'https://example.com/a' }));
+assert.throws(() => validateWan({ ...build(), first_frame_url: 'https://example.com/a', reference_audio_urls: ['https://example.com/a'] }));
+assert.throws(() => build({ seed: -1 }));
+assert.equal(build({ seed: 0 }).seed, 0);
+console.log('WAN: модели, все ставки, smart duration, режимы, лимиты и несовместимость — OK');

@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Telegram-бот поверх KIE AI: GPT Image 2, Kling 2.5 Turbo Pro, Seedance 2.0",
   "scripts": {
+    "test": "node scripts/wan-test.mjs && node scripts/offline-test.mjs",
     "dev": "node dev.js",
     "start": "node dev.js",
     "set-webhook": "node scripts/set-webhook.mjs",

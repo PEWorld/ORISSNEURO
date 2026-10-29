@@ -28,7 +28,8 @@ export async function ingestFile(ctx) {
     fileId = msg.document.file_id;
     mime = msg.document.mime_type || 'application/octet-stream';
     name = msg.document.file_name || 'file';
-    kind = mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'image';
+    kind = mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio'
+      : mime.startsWith('image/') || /\.(jpe?g|png|webp|bmp)$/i.test(name) ? 'image' : 'file';
   } else {
     throw new Error('Не понял, что это за файл');
   }
@@ -39,5 +40,6 @@ export async function ingestFile(ctx) {
   if (!res.ok) throw new Error(`Не смог скачать файл из Telegram (${res.status})`);
   const buf = Buffer.from(await res.arrayBuffer());
   const uploaded = await uploadBuffer(buf, name, mime);
-  return { kind, url: uploaded, name };
+  const media = msg.video || msg.audio || msg.voice;
+  return { kind, url: uploaded, name, mime, duration: media?.duration, size: buf.length };
 }

@@ -5,6 +5,8 @@
 // type: 'enum' | 'bool' | 'int' | 'float' | 'string'
 // def === undefined  → поле не отправляется в API (используется дефолт модели)
 
+import { wan } from './wan.js';
+
 const AR_GPT = [
   'auto', '1:1', '3:2', '2:3', '4:3', '3:4', '5:4', '4:5',
   '16:9', '9:16', '2:1', '1:2', '3:1', '1:3', '21:9', '9:21',
@@ -154,6 +156,7 @@ export const MODELS = {
       return { model, input };
     },
   },
+  wan,
 };
 
 // Обе Nano Banana принимают одну и ту же схему; t2i и i2i — один model id,
@@ -222,10 +225,11 @@ export function coerce(param, raw) {
       throw new Error(`${param.key}: нужно true или false`);
     }
     case 'int': {
-      const n = Number.parseInt(s, 10);
-      if (!Number.isFinite(n)) throw new Error(`${param.key}: нужно целое число`);
+      const n = Number(s);
+      if (!Number.isInteger(n)) throw new Error(`${param.key}: нужно целое число`);
       if (param.min != null && n < param.min) throw new Error(`${param.key}: минимум ${param.min}`);
       if (param.max != null && n > param.max) throw new Error(`${param.key}: максимум ${param.max}`);
+      if (param.validate && !param.validate(n)) throw new Error(`${param.key}: ${param.note}`);
       return n;
     }
     case 'float': {

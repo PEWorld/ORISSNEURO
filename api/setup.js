@@ -13,6 +13,7 @@ const COMMANDS = [
   { command: 'seedream', description: '🌱 Seedream 5.0 Pro' },
   { command: 'kling', description: '🎬 Kling 2.5 Turbo Pro' },
   { command: 'seedance', description: '🌀 Seedance 2.0' },
+  { command: 'wan', description: '🌊 WAN 3.0 — видео 2–30с' },
   { command: 'settings', description: 'Параметры активной модели' },
   { command: 'files', description: 'Приложенные файлы' },
   { command: 'clear', description: 'Убрать приложенные файлы' },
@@ -52,7 +53,7 @@ export default async function handler(req, res) {
     setWebhook: await call('setWebhook', {
       url: `${base}/api/telegram`,
       secret_token: secret,
-      drop_pending_updates: true,
+      drop_pending_updates: false,
       allowed_updates: ['message', 'callback_query'],
     }),
     setMyCommands: await call('setMyCommands', { commands: COMMANDS }),

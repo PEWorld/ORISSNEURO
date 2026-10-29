@@ -3,6 +3,7 @@
 // с реальным списанием, бот скажет об этом после генерации (там показывается факт).
 
 export const PRICES = {
+  'wan/3-0-video': { unit: 'second', wanRates: { '480P': 8, '720P': 16, '1080P': 32 } },
   // за картинку, одинаково для text-to-image и image-to-image
   'gpt-image-2-text-to-image': { unit: 'image', byResolution: { '1K': 6, '2K': 10, '4K': 16 } },
   'gpt-image-2-image-to-image': { unit: 'image', byResolution: { '1K': 6, '2K': 10, '4K': 16 } },
@@ -38,6 +39,18 @@ export const PRICES = {
 export function estimate(model, input) {
   const p = PRICES[model];
   if (!p) return null;
+
+  if (p.wanRates) {
+    const rate = p.wanRates[input.resolution ?? '1080P'];
+    const duration = Number(input.duration ?? 5);
+    if (!rate || !Number.isInteger(duration) || (duration !== -1 && (duration < 2 || duration > 30))) return null;
+    const hasVideo = !!input.reference_video_urls?.length;
+    if (duration === -1) return { min: 2 * rate, max: 30 * rate, exact: false,
+      note: `${rate} кред./с × (входное видео + автоматическая длительность результата); итог ≤30с, точная цена после генерации` };
+    if (hasVideo) return { min: duration * rate, max: Math.min(30, duration + 15) * rate, exact: false,
+      note: `${rate} кред./с × (входное видео + ${duration}с); длина входа уточняется KIE, суммарно ≤30с` };
+    return { min: duration * rate, max: duration * rate, exact: true, note: `${rate} кред./с × ${duration}с` };
+  }
 
   if (p.byResolution) {
     const res = input.resolution;

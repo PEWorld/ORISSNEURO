@@ -3,6 +3,9 @@
 // Запуск: node scripts/offline-test.mjs
 import { loadEnv } from '../src/env.js';
 loadEnv();
+// Изолированный прогон: никаких настоящих ключей и удалённого состояния.
+process.env.KIE_API_KEY = 'offline-test';
+for (const key of ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN', 'VERCEL', 'VERCEL_PROJECT_PRODUCTION_URL']) delete process.env[key];
 
 process.env.ALLOWED_USER_IDS = '42';
 process.env.CREATOR_USER_IDS = '77';
@@ -97,7 +100,7 @@ ok('/help отвечает', lastText(await send(text('/help'))).includes('KIE A
 {
   const c = await send(text('/kling'));
   ok('/kling показывает свои параметры', lastText(c).includes('cfg_scale'));
-  ok('в клавиатуре есть все шесть моделей', buttons(c).filter((b) => b.includes('::m|')).length === 6);
+  ok('в клавиатуре есть все семь моделей', buttons(c).filter((b) => b.includes('::m|')).length === 7);
   ok('активная модель помечена', buttons(c).some((b) => b.startsWith('● ') && b.includes('Kling')));
 }
 
@@ -256,6 +259,33 @@ console.log('\n— картинка-заглушка —');
   const reused = await placeholderMedia('wide', wide);
   ok('сохранённый file_id уходит строкой', reused.media === 'FILE_ID_STUB' && reused.cached === true);
   await store.del('ph:wide');
+}
+
+console.log('\n— WAN 3.0 —');
+{
+  const c = await send(text('/wan'));
+  ok('WAN в меню и с прайсом', lastText(c).includes('WAN 3.0') && lastText(c).includes('8 кред./с'));
+  ok('WAN duration=0 отклонён', lastText(await send(text('/set duration 0'))).includes('2–30'));
+  ok('WAN дробные секунды отклонены', lastText(await send(text('/set duration 2.5'))).includes('целое'));
+  await send(text('/set resolution 720P'));
+  let c2 = await send(text('камера движется вперёд'));
+  ok('WAN цена перед запуском 5с ×16', lastText(c2).includes('Будет потрачено: <b>80</b>'));
+  const id = buttons(c2).find(b => b.includes('::go|')).split('::go|')[1];
+  kie = [];
+  await send(tap(`go|${id}`));
+  ok('WAN отправляется с точным model id', createTasks()[0]?.b.model === 'wan/3-0-video');
+  ok('WAN audio передан', createTasks()[0]?.b.input.audio === true);
+  await settle(() => called(calls, 'editMessageMedia').length > 0);
+  await send(text('/set duration -1'));
+  c2 = await send(text('автоматическая сцена'));
+  ok('WAN автоматическая длина и диапазон цены', lastText(c2).includes('автоматически') && lastText(c2).includes('32–480'));
+  await send(text('/set reference_link_urls https://example.com'));
+  await send(text('/set mode frames'));
+  kie = [];
+  c2 = await send(text('плохой режим'));
+  ok('WAN несовместимый режим остановлен до оплаты', lastText(c2).includes('frames') && !createTasks().length);
+  await send(text('/reset'));
+  await store.del('ph:standard');
 }
 
 // подтверждение перед генерацией

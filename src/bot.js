@@ -1,5 +1,6 @@
 import { Bot, InlineKeyboard } from 'grammy';
 import { MODELS, defaultParams, findParam, coerce, formatValue } from './models.js';
+import { validateWan } from './wan.js';
 import * as session from './session.js';
 import * as store from './storage.js';
 import { createTask, getCredits, getTask, waitForTask } from './kie.js';
@@ -365,6 +366,7 @@ async function runGeneration(ctx, prompt, rawPayload) {
       if (rawPayload.input) input = { ...input, ...rawPayload.input };
     }
     if (s.modelOverride) model = s.modelOverride;
+    if (model === 'wan/3-0-video') validateWan(input);
     if (!input.prompt || String(input.prompt).trim().length < 1) {
       return ctx.reply('Нужен промпт.');
     }
@@ -456,6 +458,8 @@ const FIELD_LABELS = {
   negative_prompt: 'Негатив',
   sound: 'Звук',
   generate_audio: 'Звук',
+  audio: 'Звук',
+  seed: 'Seed',
   web_search: 'Поиск в вебе',
   nsfw_checker: 'NSFW-фильтр',
 };
@@ -466,6 +470,8 @@ const COUNT_LABELS = {
   reference_image_urls: 'Референсы',
   reference_video_urls: 'Видео-референсы',
   reference_audio_urls: 'Аудио-референсы',
+  reference_file_urls: 'Документ',
+  reference_link_urls: 'Страница',
 };
 
 async function confirmText({ model, input, label }) {
@@ -491,7 +497,7 @@ async function confirmText({ model, input, label }) {
       lines.push(`${FIELD_LABELS[key] ?? key}: ${value ? 'вкл' : 'выкл'}`);
     } else {
       const suffix = key === 'duration' ? ' с' : '';
-      lines.push(`${FIELD_LABELS[key] ?? key}: ${escapeHtml(String(value))}${suffix}`);
+      lines.push(`${FIELD_LABELS[key] ?? key}: ${key === 'duration' && value === -1 ? 'автоматически' : escapeHtml(String(value)) + suffix}`);
     }
   }
 
@@ -536,6 +542,7 @@ async function settingsText(s) {
   const mk = s.active;
   const def = MODELS[mk];
   const lines = [`${def.emoji} <b>${def.label}</b>`, ''];
+  if (def.priceHint) lines.push(escapeHtml(def.priceHint), '');
   for (const p of def.params) {
     lines.push(`<code>${p.key}</code> = <b>${escapeHtml(formatValue(p, s.params[mk]))}</b>`);
   }
@@ -612,6 +619,7 @@ const HELP = `<b>KIE AI прямо в телеге</b>
 /seedream — 🌱 Seedream 5.0 Pro
 /kling — 🎬 Kling 2.5 Turbo Pro
 /seedance — 🌀 Seedance 2.0
+/wan — 🌊 WAN 3.0 (2–30с, референсы, кадры, документы, ссылки)
 
 Выбрал модель → шлёшь текст, это промпт. Шлёшь картинку/видео/аудио — они цепляются как вход (image-to-image, image-to-video, референсы Seedance). Подпись к файлу тоже работает как промпт.
 
